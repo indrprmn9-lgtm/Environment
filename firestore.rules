@@ -1,0 +1,665 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function userEmailLower() {
+      return request.auth.token.email.lower();
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerified() && userEmailLower() == 'indrprmn9@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function callerUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActiveStaff() {
+      return isAdmin() || (
+        isVerified() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        callerUserDoc().active == true
+      );
+    }
+
+    function canAccessCompany(perusahaan) {
+      return isAdmin() || (
+        isActiveStaff() && (
+          callerUserDoc().assignedCompany == 'ALL' ||
+          callerUserDoc().assignedCompany == perusahaan
+        )
+      );
+    }
+
+    function canAccessCompanyKey(ck) {
+      return isAdmin() || (
+        isActiveStaff() && (
+          ck == 'ALL' ||
+          callerUserDoc().assignedCompany == 'ALL' ||
+          (callerUserDoc().assignedCompany == 'PT. NBSS' && ck == 'pt_nbss') ||
+          (callerUserDoc().assignedCompany == 'PT. DTSA' && ck == 'pt_dtsa') ||
+          (callerUserDoc().assignedCompany == 'PT. DTR' && ck == 'pt_dtr')
+        )
+      );
+    }
+
+    function isValidCompany(perusahaan, companyKey) {
+      return (perusahaan == 'PT. NBSS' && companyKey == 'pt_nbss') ||
+        (perusahaan == 'PT. DTSA' && companyKey == 'pt_dtsa') ||
+        (perusahaan == 'PT. DTR' && companyKey == 'pt_dtr');
+    }
+
+    function isOptionalPositiveInt(data, key) {
+      return !(key in data) || data[key] == null || (data[key] is int && data[key] >= 1 && data[key] <= 9999999);
+    }
+
+    function isOptionalNumInRange(data, key, minVal, maxVal) {
+      return !(key in data) || data[key] == null || ((data[key] is int || data[key] is float) && data[key] >= minVal && data[key] <= maxVal);
+    }
+
+    function isOptionalStrMax(data, key, maxLen) {
+      return !(key in data) || data[key] == null || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function isOptionalStringList(data, key, maxItems, maxItemLen) {
+      return !(key in data) || data[key] == null || (
+        data[key] is list &&
+        data[key].size() <= maxItems &&
+        (data[key].size() == 0 || (data[key][0] is string && data[key][0].size() >= 1 && data[key][0].size() <= maxItemLen))
+      );
+    }
+
+    // --- Validation Blueprints ---
+    function isValidStaffMember(data) {
+      return data.keys().hasAll(['email', 'name', 'role', 'assignedCompany', 'active', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['email', 'name', 'role', 'assignedCompany', 'rangeStart', 'rangeEnd', 'active', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.role in ['admin', 'petugas'] &&
+        data.assignedCompany in ['ALL', 'PT. NBSS', 'PT. DTSA', 'PT. DTR'] &&
+        isOptionalPositiveInt(data, 'rangeStart') &&
+        isOptionalPositiveInt(data, 'rangeEnd') &&
+        data.active is bool &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'name', 'role', 'assignedCompany', 'active', 'staffId', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'name', 'role', 'assignedCompany', 'rangeStart', 'rangeEnd', 'active', 'staffId', 'createdAt', 'updatedAt']) &&
+        data.uid == userId &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.role in ['admin', 'petugas'] &&
+        data.assignedCompany in ['ALL', 'PT. NBSS', 'PT. DTSA', 'PT. DTR'] &&
+        isOptionalPositiveInt(data, 'rangeStart') &&
+        isOptionalPositiveInt(data, 'rangeEnd') &&
+        data.active is bool &&
+        data.staffId is string && data.staffId.size() >= 1 && data.staffId.size() <= 128 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminGrant(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'staffId', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'staffId', 'createdAt']) &&
+        data.uid == userId &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+        data.staffId is string && data.staffId.size() >= 1 && data.staffId.size() <= 128 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidPlantRecord(data) {
+      return data.keys().hasAll([
+        'perusahaan', 'companyKey',
+        'menuType', 'tanggalInput', 'periode', 'lokasi', 'lokasiKey',
+        'namaPetugas', 'nomorPetak', 'petakKey', 'nomorTanaman',
+        'kelompokTanaman', 'jenisTanaman', 'tinggiCm', 'diameterMm',
+        'kondisiTanaman', 'keterangan', 'extremeConfirmed',
+        'createdByUid', 'createdByEmail', 'updatedByUid', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'perusahaan', 'companyKey',
+        'menuType', 'tanggalInput', 'waktuInput', 'periode', 'lokasi', 'lokasiKey',
+        'namaPetugas', 'nomorPetak', 'petakKey', 'nomorTanaman',
+        'kelompokTanaman', 'jenisTanaman', 'tinggiCm', 'diameterMm',
+        'kondisiTanaman', 'keterangan', 'extremeConfirmed',
+        'latitude', 'longitude', 'altitudeM', 'horizontalAccuracyM', 'verticalAccuracyM',
+        'gnssSource', 'coordCrs', 'photoDataUrl', 'sheetSyncedAt',
+        'createdByUid', 'createdByEmail', 'updatedByUid', 'createdAt', 'updatedAt'
+      ]) &&
+      data.perusahaan is string && data.companyKey is string &&
+      isValidCompany(data.perusahaan, data.companyKey) &&
+      data.menuType in ['SENSUS', 'MONITORING_IPPKH', 'MONITORING_APL'] &&
+      data.tanggalInput is string && data.tanggalInput.size() == 10 && data.tanggalInput.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+      (!('waktuInput' in data) || data.waktuInput == null || (data.waktuInput is string && data.waktuInput.size() >= 5 && data.waktuInput.size() <= 8 && data.waktuInput.matches('^[0-9]{2}:[0-9]{2}(:[0-9]{2})?$'))) &&
+      data.periode is string && data.periode.size() == 7 && data.periode.matches('^[0-9]{4}-[0-9]{2}$') &&
+      data.lokasi is string && data.lokasi.size() >= 1 && data.lokasi.size() <= 100 &&
+      data.lokasiKey is string && data.lokasiKey.size() >= 1 && data.lokasiKey.size() <= 80 && data.lokasiKey.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.namaPetugas is string && data.namaPetugas.size() >= 1 && data.namaPetugas.size() <= 100 &&
+      data.nomorPetak is string && data.nomorPetak.size() <= 50 && (data.menuType == 'SENSUS' || data.nomorPetak.size() >= 1) &&
+      data.petakKey is string && data.petakKey.size() >= 1 && data.petakKey.size() <= 60 && data.petakKey.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.nomorTanaman is int && data.nomorTanaman >= 1 && data.nomorTanaman <= 9999999 &&
+      data.kelompokTanaman in ['FGS', 'LOKAL_MPTS'] &&
+      data.jenisTanaman is string && data.jenisTanaman.size() >= 1 && data.jenisTanaman.size() <= 100 &&
+      (data.tinggiCm is int || data.tinggiCm is float) && (
+        (data.kondisiTanaman == 'Mati' && data.tinggiCm == 0) ||
+        (data.kondisiTanaman != 'Mati' && data.tinggiCm > 0 && data.tinggiCm <= 15000)
+      ) &&
+      (data.diameterMm is int || data.diameterMm is float) && (
+        (data.kondisiTanaman == 'Mati' && data.diameterMm == 0) ||
+        (data.kondisiTanaman != 'Mati' && data.diameterMm > 0 && data.diameterMm <= 5000)
+      ) &&
+      data.kondisiTanaman in ['Sehat', 'Kurang Sehat', 'Merana', 'Mati'] &&
+      data.keterangan is string && data.keterangan.size() <= 500 &&
+      data.extremeConfirmed is bool &&
+      isOptionalNumInRange(data, 'latitude', -90, 90) &&
+      isOptionalNumInRange(data, 'longitude', -180, 180) &&
+      isOptionalNumInRange(data, 'altitudeM', -500, 10000) &&
+      isOptionalNumInRange(data, 'horizontalAccuracyM', 0, 100000) &&
+      isOptionalNumInRange(data, 'verticalAccuracyM', 0, 100000) &&
+      isOptionalStrMax(data, 'gnssSource', 120) &&
+      isOptionalStrMax(data, 'coordCrs', 40) &&
+      isOptionalStrMax(data, 'photoDataUrl', 250000) &&
+      isOptionalStrMax(data, 'sheetSyncedAt', 40) &&
+      data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+      data.createdByEmail is string && data.createdByEmail.size() >= 3 && data.createdByEmail.size() <= 150 &&
+      data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidFieldCondition(data) {
+      return data.keys().hasAll([
+        'perusahaan', 'companyKey',
+        'menuType', 'lokasi', 'lokasiKey', 'periode',
+        'coverCrop', 'bangunanKonservasi', 'jumlahBangunan',
+        'namaPetugas', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'perusahaan', 'companyKey',
+        'menuType', 'lokasi', 'lokasiKey', 'periode',
+        'coverCrop', 'bangunanKonservasi', 'jumlahBangunan',
+        'namaPetugas', 'latitude', 'longitude', 'horizontalAccuracyM', 'verticalAccuracyM',
+        'photoDataUrl', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ]) &&
+      data.perusahaan is string && data.companyKey is string &&
+      isValidCompany(data.perusahaan, data.companyKey) &&
+      data.menuType in ['MONITORING_IPPKH', 'MONITORING_APL'] &&
+      data.lokasi is string && data.lokasi.size() >= 1 && data.lokasi.size() <= 100 &&
+      data.lokasiKey is string && data.lokasiKey.size() >= 1 && data.lokasiKey.size() <= 80 && data.lokasiKey.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.periode is string && data.periode.size() == 7 && data.periode.matches('^[0-9]{4}-[0-9]{2}$') &&
+      data.coverCrop in ['Rapat', 'Kurang Rapat', 'Tidak Ada'] &&
+      data.bangunanKonservasi in ['Ada', 'Tidak Ada'] &&
+      data.jumlahBangunan is int && (
+        (data.bangunanKonservasi == 'Tidak Ada' && data.jumlahBangunan == 0) ||
+        (data.bangunanKonservasi == 'Ada' && data.jumlahBangunan >= 1 && data.jumlahBangunan <= 10000)
+      ) &&
+      data.namaPetugas is string && data.namaPetugas.size() >= 1 && data.namaPetugas.size() <= 100 &&
+      isOptionalNumInRange(data, 'latitude', -90, 90) &&
+      isOptionalNumInRange(data, 'longitude', -180, 180) &&
+      isOptionalNumInRange(data, 'horizontalAccuracyM', 0, 100000) &&
+      isOptionalNumInRange(data, 'verticalAccuracyM', 0, 100000) &&
+      isOptionalStrMax(data, 'photoDataUrl', 250000) &&
+      data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+      data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidCanopyCover(data) {
+      return data.keys().hasAll([
+        'perusahaan', 'companyKey',
+        'menuType', 'lokasi', 'lokasiKey', 'nomorPetak', 'petakKey', 'periode',
+        'penutupanTajuk', 'namaPetugas', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'perusahaan', 'companyKey',
+        'menuType', 'lokasi', 'lokasiKey', 'nomorPetak', 'petakKey', 'periode',
+        'penutupanTajuk', 'namaPetugas', 'createdByUid', 'updatedByUid', 'createdAt', 'updatedAt'
+      ]) &&
+      data.perusahaan is string && data.companyKey is string &&
+      isValidCompany(data.perusahaan, data.companyKey) &&
+      data.menuType == 'MONITORING_APL' &&
+      data.lokasi is string && data.lokasi.size() >= 1 && data.lokasi.size() <= 100 &&
+      data.lokasiKey is string && data.lokasiKey.size() >= 1 && data.lokasiKey.size() <= 80 && data.lokasiKey.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.nomorPetak is string && data.nomorPetak.size() >= 1 && data.nomorPetak.size() <= 50 &&
+      data.petakKey is string && data.petakKey.size() >= 1 && data.petakKey.size() <= 60 && data.petakKey.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.periode is string && data.periode.size() == 7 && data.periode.matches('^[0-9]{4}-[0-9]{2}$') &&
+      data.penutupanTajuk in ['Tertutup', 'Kurang Tertutup', 'Tidak Tertutup'] &&
+      data.namaPetugas is string && data.namaPetugas.size() >= 1 && data.namaPetugas.size() <= 100 &&
+      data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+      data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidLocationMaster(data, docId) {
+      return data.keys().hasAll(['perusahaan', 'companyKey', 'name', 'lokasiKey', 'createdByUid', 'createdAt']) &&
+        data.keys().hasOnly(['perusahaan', 'companyKey', 'name', 'lokasiKey', 'createdByUid', 'createdAt']) &&
+        data.perusahaan is string && data.companyKey is string &&
+        isValidCompany(data.perusahaan, data.companyKey) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.lokasiKey is string && data.lokasiKey.size() >= 1 && data.lokasiKey.size() <= 80 && data.lokasiKey.matches('^[a-zA-Z0-9_\\-]+$') &&
+        docId == (data.companyKey + '__' + data.lokasiKey) &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidPetakMaster(data, docId) {
+      return data.keys().hasAll(['perusahaan', 'companyKey', 'lokasi', 'lokasiKey', 'name', 'petakKey', 'createdByUid', 'createdAt']) &&
+        data.keys().hasOnly(['perusahaan', 'companyKey', 'lokasi', 'lokasiKey', 'name', 'petakKey', 'createdByUid', 'createdAt']) &&
+        data.perusahaan is string && data.companyKey is string &&
+        isValidCompany(data.perusahaan, data.companyKey) &&
+        data.lokasi is string && data.lokasi.size() >= 1 && data.lokasi.size() <= 100 &&
+        data.lokasiKey is string && data.lokasiKey.size() >= 1 && data.lokasiKey.size() <= 80 && data.lokasiKey.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 50 &&
+        data.petakKey is string && data.petakKey.size() >= 1 && data.petakKey.size() <= 60 && data.petakKey.matches('^[a-zA-Z0-9_\\-]+$') &&
+        docId == (data.companyKey + '__' + data.lokasiKey + '__' + data.petakKey) &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidSpeciesMaster(data, docId) {
+      return data.keys().hasAll(['perusahaan', 'companyKey', 'kelompokTanaman', 'name', 'speciesKey', 'active', 'createdByUid', 'createdAt']) &&
+        data.keys().hasOnly(['perusahaan', 'companyKey', 'kelompokTanaman', 'name', 'speciesKey', 'active', 'createdByUid', 'createdAt']) &&
+        data.perusahaan is string && data.companyKey is string &&
+        isValidCompany(data.perusahaan, data.companyKey) &&
+        data.kelompokTanaman in ['FGS', 'LOKAL_MPTS'] &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.speciesKey is string && data.speciesKey.size() >= 1 && data.speciesKey.size() <= 80 && data.speciesKey.matches('^[a-zA-Z0-9_\\-]+$') &&
+        docId == (data.companyKey + '__' + data.kelompokTanaman + '__' + data.speciesKey) &&
+        data.active is bool &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidCompanySpreadsheet(data, docId) {
+      return data.keys().hasAll(['companyKey', 'perusahaan', 'spreadsheetId', 'spreadsheetUrl', 'ownerEmail', 'syncedRecordCount', 'updatedAt']) &&
+        data.keys().hasOnly(['companyKey', 'perusahaan', 'spreadsheetId', 'spreadsheetUrl', 'ownerEmail', 'lastSyncedAt', 'syncedRecordCount', 'updatedAt']) &&
+        isValidCompany(data.perusahaan, data.companyKey) &&
+        docId == data.companyKey &&
+        data.spreadsheetId is string && data.spreadsheetId.size() >= 1 && data.spreadsheetId.size() <= 200 &&
+        data.spreadsheetUrl is string && data.spreadsheetUrl.size() >= 1 && data.spreadsheetUrl.size() <= 500 &&
+        data.ownerEmail is string && data.ownerEmail.size() >= 3 && data.ownerEmail.size() <= 150 &&
+        isOptionalStrMax(data, 'lastSyncedAt', 40) &&
+        data.syncedRecordCount is int && data.syncedRecordCount >= 0 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidBaseMapLayer(data) {
+      return data.keys().hasAll(['perusahaan', 'companyKey', 'name', 'fileType', 'crsCode', 'uploadedByUid', 'createdAt']) &&
+        data.keys().hasOnly(['perusahaan', 'companyKey', 'name', 'fileType', 'crsCode', 'fileDataBase64', 'geoJsonText', 'bboxJson', 'chunkCount', 'labelEnabled', 'labelAttributes', 'availableAttributes', 'uploadedByUid', 'createdAt']) &&
+        isValidCompany(data.perusahaan, data.companyKey) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.fileType in ['pdf', 'shapefile', 'geojson'] &&
+        data.crsCode is string && data.crsCode.size() >= 1 && data.crsCode.size() <= 40 &&
+        isOptionalStrMax(data, 'fileDataBase64', 700000) &&
+        isOptionalStrMax(data, 'geoJsonText', 700000) &&
+        isOptionalStrMax(data, 'bboxJson', 1000) &&
+        (!('chunkCount' in data) || data.chunkCount == null || (data.chunkCount is int && data.chunkCount >= 0 && data.chunkCount <= 100)) &&
+        (!('labelEnabled' in data) || data.labelEnabled == null || data.labelEnabled is bool) &&
+        isOptionalStringList(data, 'labelAttributes', 15, 100) &&
+        isOptionalStringList(data, 'availableAttributes', 100, 100) &&
+        data.uploadedByUid is string && data.uploadedByUid.size() >= 1 && data.uploadedByUid.size() <= 128 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidBaseMapChunk(data) {
+      return data.keys().hasAll(['index', 'data']) &&
+        data.keys().hasOnly(['index', 'data']) &&
+        data.index is int && data.index >= 0 && data.index <= 100 &&
+        data.data is string && data.data.size() >= 1 && data.data.size() <= 700000;
+    }
+
+    function isValidGrowthEvalSettings(data, docId) {
+      return data.keys().hasAll(['companyKey', 'enabled', 'minSurvivalPct', 'minDeltaHeightCm', 'updatedByUid', 'updatedAt']) &&
+        data.keys().hasOnly(['companyKey', 'enabled', 'minSurvivalPct', 'minDeltaHeightCm', 'updatedByUid', 'updatedAt']) &&
+        data.companyKey in ['ALL', 'pt_nbss', 'pt_dtsa', 'pt_dtr'] &&
+        docId == data.companyKey &&
+        data.enabled is bool &&
+        (data.minSurvivalPct is int || data.minSurvivalPct is float) && data.minSurvivalPct >= 0 && data.minSurvivalPct <= 100 &&
+        (data.minDeltaHeightCm is int || data.minDeltaHeightCm is float) && data.minDeltaHeightCm >= 0 && data.minDeltaHeightCm <= 1000 &&
+        data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+        data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    match /staff_whitelist/{staffId} {
+      allow get: if isValidId(staffId) && (
+        isAdmin() || (isVerified() && existing().email.lower() == userEmailLower())
+      );
+      allow list: if isAdmin() || (
+        isVerified() && resource.data.email == userEmailLower()
+      );
+      allow create: if isAdmin() &&
+        isValidId(staffId) &&
+        isValidStaffMember(incoming()) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(staffId) &&
+        isValidStaffMember(incoming()) &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'assignedCompany', 'rangeStart', 'rangeEnd', 'active', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(staffId);
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (
+        isAdmin() || (isVerified() && request.auth.uid == userId)
+      );
+      allow list: if isAdmin() || (
+        isVerified() && resource.data.uid == request.auth.uid
+      );
+      allow create: if isVerified() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().email.lower() == userEmailLower() &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time && (
+          (isBootstrappedAdmin() && incoming().role == 'admin' && incoming().active == true) ||
+          (
+            exists(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)) &&
+            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.email.lower() == userEmailLower() &&
+            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.role == incoming().role &&
+            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.assignedCompany == incoming().assignedCompany &&
+            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.active == true &&
+            incoming().active == true
+          )
+        );
+      allow update: if isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'assignedCompany', 'rangeStart', 'rangeEnd', 'active', 'staffId', 'updatedAt'])) ||
+          (
+            isVerified() &&
+            request.auth.uid == userId &&
+            incoming().role == existing().role &&
+            incoming().active == existing().active &&
+            incoming().staffId == existing().staffId &&
+            exists(/databases/$(database)/documents/staff_whitelist/$(existing().staffId)) &&
+            get(/databases/$(database)/documents/staff_whitelist/$(existing().staffId)).data.assignedCompany == incoming().assignedCompany &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'assignedCompany', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (
+        isAdmin() || (isVerified() && request.auth.uid == userId)
+      );
+      allow list: if isAdmin() || (
+        isVerified() && resource.data.uid == request.auth.uid
+      );
+      allow create: if isVerified() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidAdminGrant(incoming(), userId) &&
+        incoming().email.lower() == userEmailLower() &&
+        incoming().createdAt == request.time && (
+          isBootstrappedAdmin() || (
+            exists(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)) &&
+            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.email.lower() == userEmailLower() &&
+            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.role == 'admin' &&
+            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.active == true
+          )
+        );
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    match /system_meta/{docId} {
+      allow get: if isValidId(docId) && isBootstrappedAdmin();
+      allow create, update: if isValidId(docId) && isBootstrappedAdmin() &&
+        incoming().keys().hasAll(['resetByUid', 'resetAt']) &&
+        incoming().keys().hasOnly(['resetByUid', 'resetAt']) &&
+        incoming().resetByUid == request.auth.uid &&
+        incoming().resetAt == request.time;
+    }
+
+    match /plant_records/{recordId} {
+      allow get: if isValidId(recordId) && canAccessCompany(existing().perusahaan);
+      allow list: if canAccessCompany(resource.data.perusahaan);
+      allow create: if isActiveStaff() &&
+        isValidId(recordId) &&
+        isValidPlantRecord(incoming()) &&
+        canAccessCompany(incoming().perusahaan) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(recordId) &&
+        isValidPlantRecord(incoming()) &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().createdByEmail == existing().createdByEmail &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'perusahaan', 'companyKey',
+          'tanggalInput', 'waktuInput', 'periode', 'lokasi', 'lokasiKey', 'namaPetugas',
+          'nomorPetak', 'petakKey', 'nomorTanaman', 'kelompokTanaman',
+          'jenisTanaman', 'tinggiCm', 'diameterMm', 'kondisiTanaman',
+          'keterangan', 'extremeConfirmed', 'sheetSyncedAt', 'updatedByUid', 'updatedAt'
+        ]);
+      allow delete: if isAdmin() && isValidId(recordId);
+    }
+
+    match /field_conditions/{conditionId} {
+      allow get: if isValidId(conditionId) && canAccessCompany(existing().perusahaan);
+      allow list: if canAccessCompany(resource.data.perusahaan);
+      allow create: if isActiveStaff() &&
+        isValidId(conditionId) &&
+        isValidFieldCondition(incoming()) &&
+        canAccessCompany(incoming().perusahaan) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isActiveStaff() &&
+        isValidId(conditionId) &&
+        isValidFieldCondition(incoming()) &&
+        canAccessCompany(existing().perusahaan) &&
+        incoming().companyKey == existing().companyKey &&
+        incoming().perusahaan == existing().perusahaan &&
+        incoming().menuType == existing().menuType &&
+        incoming().lokasiKey == existing().lokasiKey &&
+        incoming().periode == existing().periode &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'lokasi', 'coverCrop', 'bangunanKonservasi', 'jumlahBangunan',
+          'namaPetugas', 'latitude', 'longitude', 'horizontalAccuracyM',
+          'verticalAccuracyM', 'photoDataUrl', 'updatedByUid', 'updatedAt'
+        ]);
+      allow delete: if isAdmin() && isValidId(conditionId);
+    }
+
+    match /canopy_covers/{canopyId} {
+      allow get: if isValidId(canopyId) && canAccessCompany(existing().perusahaan);
+      allow list: if canAccessCompany(resource.data.perusahaan);
+      allow create: if isActiveStaff() &&
+        isValidId(canopyId) &&
+        isValidCanopyCover(incoming()) &&
+        canAccessCompany(incoming().perusahaan) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isActiveStaff() &&
+        isValidId(canopyId) &&
+        isValidCanopyCover(incoming()) &&
+        canAccessCompany(existing().perusahaan) &&
+        incoming().companyKey == existing().companyKey &&
+        incoming().perusahaan == existing().perusahaan &&
+        incoming().menuType == existing().menuType &&
+        incoming().lokasiKey == existing().lokasiKey &&
+        incoming().petakKey == existing().petakKey &&
+        incoming().periode == existing().periode &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'lokasi', 'nomorPetak', 'penutupanTajuk',
+          'namaPetugas', 'updatedByUid', 'updatedAt'
+        ]);
+      allow delete: if isAdmin() && isValidId(canopyId);
+    }
+
+    match /locations_master/{docId} {
+      allow get: if isValidId(docId) && canAccessCompany(existing().perusahaan);
+      allow list: if canAccessCompany(resource.data.perusahaan);
+      allow create: if isActiveStaff() &&
+        isValidId(docId) &&
+        isValidLocationMaster(incoming(), docId) &&
+        canAccessCompany(incoming().perusahaan) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(docId) &&
+        isValidLocationMaster(incoming(), docId) &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /petaks_master/{docId} {
+      allow get: if isValidId(docId) && canAccessCompany(existing().perusahaan);
+      allow list: if canAccessCompany(resource.data.perusahaan);
+      allow create: if isAdmin() &&
+        isValidId(docId) &&
+        isValidPetakMaster(incoming(), docId) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(docId) &&
+        isValidPetakMaster(incoming(), docId) &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /species_master/{docId} {
+      allow get: if isValidId(docId) && canAccessCompany(existing().perusahaan);
+      allow list: if canAccessCompany(resource.data.perusahaan);
+      allow create: if isAdmin() &&
+        isValidId(docId) &&
+        isValidSpeciesMaster(incoming(), docId) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(docId) &&
+        isValidSpeciesMaster(incoming(), docId) &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['active', 'name']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /company_spreadsheets/{companyKey} {
+      allow get: if isValidId(companyKey) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isAdmin() &&
+        isValidId(companyKey) &&
+        isValidCompanySpreadsheet(incoming(), companyKey) &&
+        incoming().updatedAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(companyKey) &&
+        isValidCompanySpreadsheet(incoming(), companyKey) &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['spreadsheetId', 'spreadsheetUrl', 'ownerEmail', 'lastSyncedAt', 'syncedRecordCount', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(companyKey);
+    }
+
+    match /base_map_layers/{layerId} {
+      allow get: if isValidId(layerId) && canAccessCompany(existing().perusahaan);
+      allow list: if canAccessCompany(resource.data.perusahaan);
+      allow create: if isAdmin() &&
+        isValidId(layerId) &&
+        isValidBaseMapLayer(incoming()) &&
+        incoming().uploadedByUid == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(layerId) &&
+        isValidBaseMapLayer(incoming()) &&
+        incoming().uploadedByUid == existing().uploadedByUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'bboxJson', 'chunkCount', 'fileDataBase64', 'geoJsonText', 'labelEnabled', 'labelAttributes', 'availableAttributes']);
+      allow delete: if isAdmin() && isValidId(layerId);
+
+      match /chunks/{chunkId} {
+        allow get: if isValidId(layerId) && isValidId(chunkId) && isActiveStaff() &&
+          exists(/databases/$(database)/documents/base_map_layers/$(layerId)) &&
+          canAccessCompany(get(/databases/$(database)/documents/base_map_layers/$(layerId)).data.perusahaan);
+        allow list: if isValidId(layerId) && isActiveStaff() &&
+          exists(/databases/$(database)/documents/base_map_layers/$(layerId)) &&
+          canAccessCompany(get(/databases/$(database)/documents/base_map_layers/$(layerId)).data.perusahaan);
+        allow create: if isAdmin() &&
+          isValidId(layerId) &&
+          isValidId(chunkId) &&
+          isValidBaseMapChunk(incoming()) &&
+          exists(/databases/$(database)/documents/base_map_layers/$(layerId));
+        allow delete: if isAdmin() && isValidId(layerId) && isValidId(chunkId);
+      }
+    }
+
+    match /growth_eval_settings/{companyKey} {
+      allow get: if isValidId(companyKey) && canAccessCompanyKey(companyKey);
+      allow list: if canAccessCompanyKey(resource.data.companyKey);
+      allow create, update: if isAdmin() &&
+        isValidId(companyKey) &&
+        isValidGrowthEvalSettings(incoming(), companyKey) &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(companyKey);
+    }
+  }
+}

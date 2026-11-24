@@ -1,0 +1,8 @@
+{
+  "name": "Sensus & Monitoring Tanaman",
+  "description": "Berdoa sebelum bekerja, utamakan keselamatan Keja. serta gunakan APD lengkap di seluruh area operasional.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

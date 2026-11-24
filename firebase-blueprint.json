@@ -1,0 +1,332 @@
+{
+  "entities": {
+    "StaffMember": {
+      "title": "StaffMember",
+      "description": "Authorized officer or administrator email whitelist managed by admins",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 150 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "role": { "type": "string", "enum": ["admin", "petugas"] },
+        "assignedCompany": { "type": "string", "enum": ["ALL", "PT. NBSS", "PT. DTSA", "PT. DTR"] },
+        "rangeStart": { "type": "integer" },
+        "rangeEnd": { "type": "integer" },
+        "active": { "type": "boolean" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "name", "role", "assignedCompany", "active", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile linked to staff whitelist",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 150 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "role": { "type": "string", "enum": ["admin", "petugas"] },
+        "assignedCompany": { "type": "string", "enum": ["ALL", "PT. NBSS", "PT. DTSA", "PT. DTR"] },
+        "rangeStart": { "type": "integer" },
+        "rangeEnd": { "type": "integer" },
+        "active": { "type": "boolean" },
+        "staffId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "name", "role", "assignedCompany", "active", "staffId", "createdAt", "updatedAt"]
+    },
+    "AdminGrant": {
+      "title": "AdminGrant",
+      "description": "Activated administrator role document keyed by user UID",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 150 },
+        "staffId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "staffId", "createdAt"]
+    },
+    "SystemMeta": {
+      "title": "SystemMeta",
+      "description": "System lifecycle state markers managed by bootstrap administrator",
+      "type": "object",
+      "properties": {
+        "resetByUid": { "type": "string", "maxLength": 128 },
+        "resetAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["resetByUid", "resetAt"]
+    },
+    "PlantRecord": {
+      "title": "PlantRecord",
+      "description": "Plant census or monitoring measurement record with GNSS coordinates and optional photo",
+      "type": "object",
+      "properties": {
+        "perusahaan": { "type": "string", "enum": ["PT. NBSS", "PT. DTSA", "PT. DTR"] },
+        "companyKey": { "type": "string", "minLength": 1, "maxLength": 30, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "menuType": { "type": "string", "enum": ["SENSUS", "MONITORING_IPPKH", "MONITORING_APL"] },
+        "tanggalInput": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "waktuInput": { "type": "string", "minLength": 5, "maxLength": 8, "pattern": "^[0-9]{2}:[0-9]{2}(:[0-9]{2})?$" },
+        "periode": { "type": "string", "minLength": 7, "maxLength": 7, "pattern": "^[0-9]{4}-[0-9]{2}$" },
+        "lokasi": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "lokasiKey": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "namaPetugas": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "nomorPetak": { "type": "string", "minLength": 0, "maxLength": 50 },
+        "petakKey": { "type": "string", "minLength": 1, "maxLength": 60, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "nomorTanaman": { "type": "integer" },
+        "kelompokTanaman": { "type": "string", "enum": ["FGS", "LOKAL_MPTS"] },
+        "jenisTanaman": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "tinggiCm": { "type": "number" },
+        "diameterMm": { "type": "number" },
+        "kondisiTanaman": { "type": "string", "enum": ["Sehat", "Kurang Sehat", "Merana", "Mati"] },
+        "keterangan": { "type": "string", "maxLength": 500 },
+        "extremeConfirmed": { "type": "boolean" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "altitudeM": { "type": "number" },
+        "horizontalAccuracyM": { "type": "number" },
+        "verticalAccuracyM": { "type": "number" },
+        "gnssSource": { "type": "string", "maxLength": 120 },
+        "coordCrs": { "type": "string", "maxLength": 40 },
+        "photoDataUrl": { "type": "string", "maxLength": 250000 },
+        "sheetSyncedAt": { "type": "string", "maxLength": 40 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 150 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "perusahaan", "companyKey", "menuType", "tanggalInput", "periode", "lokasi", "lokasiKey",
+        "namaPetugas", "nomorPetak", "petakKey", "nomorTanaman", "kelompokTanaman", "jenisTanaman",
+        "tinggiCm", "diameterMm", "kondisiTanaman", "keterangan", "extremeConfirmed",
+        "createdByUid", "createdByEmail", "updatedByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "FieldCondition": {
+      "title": "FieldCondition",
+      "description": "Location-level field conditions recorded per company in IPPKH or APL monitoring",
+      "type": "object",
+      "properties": {
+        "perusahaan": { "type": "string", "enum": ["PT. NBSS", "PT. DTSA", "PT. DTR"] },
+        "companyKey": { "type": "string", "minLength": 1, "maxLength": 30, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "menuType": { "type": "string", "enum": ["MONITORING_IPPKH", "MONITORING_APL"] },
+        "lokasi": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "lokasiKey": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "periode": { "type": "string", "minLength": 7, "maxLength": 7, "pattern": "^[0-9]{4}-[0-9]{2}$" },
+        "coverCrop": { "type": "string", "enum": ["Rapat", "Kurang Rapat", "Tidak Ada"] },
+        "bangunanKonservasi": { "type": "string", "enum": ["Ada", "Tidak Ada"] },
+        "jumlahBangunan": { "type": "integer" },
+        "namaPetugas": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "horizontalAccuracyM": { "type": "number" },
+        "verticalAccuracyM": { "type": "number" },
+        "photoDataUrl": { "type": "string", "maxLength": 250000 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "perusahaan", "companyKey", "menuType", "lokasi", "lokasiKey", "periode",
+        "coverCrop", "bangunanKonservasi", "jumlahBangunan",
+        "namaPetugas", "createdByUid", "updatedByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "CanopyCover": {
+      "title": "CanopyCover",
+      "description": "Plot-level canopy closure assessment recorded per company in APL monitoring",
+      "type": "object",
+      "properties": {
+        "perusahaan": { "type": "string", "enum": ["PT. NBSS", "PT. DTSA", "PT. DTR"] },
+        "companyKey": { "type": "string", "minLength": 1, "maxLength": 30, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "menuType": { "type": "string", "enum": ["MONITORING_APL"] },
+        "lokasi": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "lokasiKey": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "nomorPetak": { "type": "string", "minLength": 1, "maxLength": 50 },
+        "petakKey": { "type": "string", "minLength": 1, "maxLength": 60, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "periode": { "type": "string", "minLength": 7, "maxLength": 7, "pattern": "^[0-9]{4}-[0-9]{2}$" },
+        "penutupanTajuk": { "type": "string", "enum": ["Tertutup", "Kurang Tertutup", "Tidak Tertutup"] },
+        "namaPetugas": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "perusahaan", "companyKey", "menuType", "lokasi", "lokasiKey",
+        "nomorPetak", "petakKey", "periode", "penutupanTajuk",
+        "namaPetugas", "createdByUid", "updatedByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "LocationMaster": {
+      "title": "LocationMaster",
+      "description": "Canonical list of field locations per company",
+      "type": "object",
+      "properties": {
+        "perusahaan": { "type": "string", "enum": ["PT. NBSS", "PT. DTSA", "PT. DTR"] },
+        "companyKey": { "type": "string", "minLength": 1, "maxLength": 30, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "lokasiKey": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["perusahaan", "companyKey", "name", "lokasiKey", "createdByUid", "createdAt"]
+    },
+    "PetakMaster": {
+      "title": "PetakMaster",
+      "description": "Master plot identifiers per company and location",
+      "type": "object",
+      "properties": {
+        "perusahaan": { "type": "string", "enum": ["PT. NBSS", "PT. DTSA", "PT. DTR"] },
+        "companyKey": { "type": "string", "minLength": 1, "maxLength": 30, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "lokasi": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "lokasiKey": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 50 },
+        "petakKey": { "type": "string", "minLength": 1, "maxLength": 60, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["perusahaan", "companyKey", "lokasi", "lokasiKey", "name", "petakKey", "createdByUid", "createdAt"]
+    },
+    "SpeciesMaster": {
+      "title": "SpeciesMaster",
+      "description": "Master species options grouped by FGS and LOKAL_MPTS per company",
+      "type": "object",
+      "properties": {
+        "perusahaan": { "type": "string", "enum": ["PT. NBSS", "PT. DTSA", "PT. DTR"] },
+        "companyKey": { "type": "string", "minLength": 1, "maxLength": 30, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "kelompokTanaman": { "type": "string", "enum": ["FGS", "LOKAL_MPTS"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "speciesKey": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "active": { "type": "boolean" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["perusahaan", "companyKey", "kelompokTanaman", "name", "speciesKey", "active", "createdByUid", "createdAt"]
+    },
+    "CompanySpreadsheet": {
+      "title": "CompanySpreadsheet",
+      "description": "Linked Google Spreadsheet metadata per company",
+      "type": "object",
+      "properties": {
+        "companyKey": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "perusahaan": { "type": "string", "enum": ["PT. NBSS", "PT. DTSA", "PT. DTR"] },
+        "spreadsheetId": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "spreadsheetUrl": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "ownerEmail": { "type": "string", "minLength": 3, "maxLength": 150 },
+        "lastSyncedAt": { "type": "string", "maxLength": 40 },
+        "syncedRecordCount": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["companyKey", "perusahaan", "spreadsheetId", "spreadsheetUrl", "ownerEmail", "syncedRecordCount", "updatedAt"]
+    },
+    "BaseMapLayer": {
+      "title": "BaseMapLayer",
+      "description": "Georeferenced PDF, Shapefile, or GeoJSON base map metadata per company",
+      "type": "object",
+      "properties": {
+        "perusahaan": { "type": "string", "enum": ["PT. NBSS", "PT. DTSA", "PT. DTR"] },
+        "companyKey": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "fileType": { "type": "string", "enum": ["pdf", "shapefile", "geojson"] },
+        "crsCode": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "fileDataBase64": { "type": "string", "maxLength": 700000 },
+        "geoJsonText": { "type": "string", "maxLength": 700000 },
+        "bboxJson": { "type": "string", "maxLength": 1000 },
+        "chunkCount": { "type": "integer" },
+        "labelEnabled": { "type": "boolean" },
+        "labelAttributes": { "type": "array" },
+        "availableAttributes": { "type": "array" },
+        "uploadedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["perusahaan", "companyKey", "name", "fileType", "crsCode", "uploadedByUid", "createdAt"]
+    },
+    "BaseMapChunk": {
+      "title": "BaseMapChunk",
+      "description": "Chunked payload slice for large base map PDFs or GeoJSON layers",
+      "type": "object",
+      "properties": {
+        "index": { "type": "integer" },
+        "data": { "type": "string", "minLength": 1, "maxLength": 700000 }
+      },
+      "required": ["index", "data"]
+    },
+    "GrowthEvalSettings": {
+      "title": "GrowthEvalSettings",
+      "description": "Admin-configurable optional growth trend and infill thresholds",
+      "type": "object",
+      "properties": {
+        "companyKey": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "enabled": { "type": "boolean" },
+        "minSurvivalPct": { "type": "number" },
+        "minDeltaHeightCm": { "type": "number" },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["companyKey", "enabled", "minSurvivalPct", "minDeltaHeightCm", "updatedByUid", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/staff_whitelist/{staffId}": {
+      "schema": { "$ref": "#/entities/StaffMember" },
+      "description": "Admin-managed roster of authorized field officers and admins"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Active user profiles keyed by Firebase Auth UID"
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminGrant" },
+      "description": "Activated administrator role grants keyed by UID"
+    },
+    "/system_meta/{docId}": {
+      "schema": { "$ref": "#/entities/SystemMeta" },
+      "description": "System initialization and reset markers"
+    },
+    "/plant_records/{recordId}": {
+      "schema": { "$ref": "#/entities/PlantRecord" },
+      "description": "Plant measurement records for Sensus, Monitoring IPPKH, and Monitoring APL"
+    },
+    "/field_conditions/{conditionId}": {
+      "schema": { "$ref": "#/entities/FieldCondition" },
+      "description": "Location-level field condition metrics for IPPKH and APL monitoring"
+    },
+    "/canopy_covers/{canopyId}": {
+      "schema": { "$ref": "#/entities/CanopyCover" },
+      "description": "Plot-level canopy closure metrics for APL monitoring"
+    },
+    "/locations_master/{docId}": {
+      "schema": { "$ref": "#/entities/LocationMaster" },
+      "description": "Canonical list of field locations scoped per company"
+    },
+    "/petaks_master/{docId}": {
+      "schema": { "$ref": "#/entities/PetakMaster" },
+      "description": "Master plot numbers scoped per company and location"
+    },
+    "/species_master/{docId}": {
+      "schema": { "$ref": "#/entities/SpeciesMaster" },
+      "description": "Master species list grouped by FGS and LOKAL_MPTS per company"
+    },
+    "/company_spreadsheets/{companyKey}": {
+      "schema": { "$ref": "#/entities/CompanySpreadsheet" },
+      "description": "Linked Google Spreadsheets per company"
+    },
+    "/base_map_layers/{layerId}": {
+      "schema": { "$ref": "#/entities/BaseMapLayer" },
+      "description": "Georeferenced base map layers per company"
+    },
+    "/base_map_layers/{layerId}/chunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/BaseMapChunk" },
+      "description": "Chunked payload storage for large base map files"
+    },
+    "/growth_eval_settings/{companyKey}": {
+      "schema": { "$ref": "#/entities/GrowthEvalSettings" },
+      "description": "Optional admin-configured evaluation thresholds per company"
+    }
+  }
+}
