@@ -24,6 +24,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useData } from '../contexts/DataContext';
 import { formatCoordinatePair } from '../lib/crsTransform';
+import { formatFirestoreErrorForUser } from '../lib/firestoreErrors';
 import {
   GNSS_CAPTURE_MODES,
   type GnssCaptureController,
@@ -685,28 +686,34 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
       return;
     }
     setFormError(null);
-    const res = await saveFieldCondition({
-      perusahaan,
-      menuType: menuType as 'MONITORING_IPPKH' | 'MONITORING_APL',
-      lokasi: cleanLokasi,
-      periode,
-      coverCrop,
-      bangunanKonservasi,
-      jumlahBangunan: jml,
-      namaPetugas,
-      latitude: gnssFix?.latitude ?? null,
-      longitude: gnssFix?.longitude ?? null,
-      horizontalAccuracyM: gnssFix?.horizontalAccuracyM ?? null,
-      verticalAccuracyM: gnssFix?.verticalAccuracyM ?? null,
-      photoDataUrl: condPhotoUrl,
-    });
-    lastConfirmedLokasiRef.current = `${companyKey}__${menuType}__${makeSafeKey(cleanLokasi)}__${periode}`;
-    setShowFieldCondForm(false);
-    setSuccessNotice(
-      res.savedOffline
-        ? `Kondisi lapangan "${cleanLokasi}" (${perusahaan}) disimpan ke antrean offline.`
-        : `Kondisi lapangan "${cleanLokasi}" (${perusahaan}) tersimpan.`
-    );
+    try {
+      const res = await saveFieldCondition({
+        perusahaan,
+        menuType: menuType as 'MONITORING_IPPKH' | 'MONITORING_APL',
+        lokasi: cleanLokasi,
+        periode,
+        coverCrop,
+        bangunanKonservasi,
+        jumlahBangunan: jml,
+        namaPetugas,
+        latitude: gnssFix?.latitude ?? null,
+        longitude: gnssFix?.longitude ?? null,
+        horizontalAccuracyM: gnssFix?.horizontalAccuracyM ?? null,
+        verticalAccuracyM: gnssFix?.verticalAccuracyM ?? null,
+        photoDataUrl: condPhotoUrl,
+      });
+      lastConfirmedLokasiRef.current = `${companyKey}__${menuType}__${makeSafeKey(cleanLokasi)}__${periode}`;
+      setShowFieldCondForm(false);
+      setSuccessNotice(
+        res.savedOffline
+          ? `Kondisi lapangan "${cleanLokasi}" (${perusahaan}) disimpan ke antrean offline.`
+          : `Kondisi lapangan "${cleanLokasi}" (${perusahaan}) tersimpan.`
+      );
+    } catch (err) {
+      setFormError(
+        formatFirestoreErrorForUser(err, 'Gagal menyimpan kondisi lapangan.')
+      );
+    }
   };
 
   const handleSaveCanopyOnly = async () => {
@@ -719,21 +726,27 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
       return;
     }
     setFormError(null);
-    const res = await saveCanopyCover({
-      perusahaan,
-      lokasi: cleanLokasi,
-      nomorPetak: cleanPetak,
-      periode,
-      penutupanTajuk,
-      namaPetugas,
-    });
-    lastConfirmedPetakRef.current = `${companyKey}__${makeSafeKey(cleanLokasi)}__${makeSafeKey(cleanPetak)}__${periode}`;
-    setShowCanopyForm(false);
-    setSuccessNotice(
-      res.savedOffline
-        ? `Penutupan tajuk Petak "${cleanPetak}" (${perusahaan}) disimpan ke antrean offline.`
-        : `Penutupan tajuk Petak "${cleanPetak}" (${perusahaan}) tersimpan.`
-    );
+    try {
+      const res = await saveCanopyCover({
+        perusahaan,
+        lokasi: cleanLokasi,
+        nomorPetak: cleanPetak,
+        periode,
+        penutupanTajuk,
+        namaPetugas,
+      });
+      lastConfirmedPetakRef.current = `${companyKey}__${makeSafeKey(cleanLokasi)}__${makeSafeKey(cleanPetak)}__${periode}`;
+      setShowCanopyForm(false);
+      setSuccessNotice(
+        res.savedOffline
+          ? `Penutupan tajuk Petak "${cleanPetak}" (${perusahaan}) disimpan ke antrean offline.`
+          : `Penutupan tajuk Petak "${cleanPetak}" (${perusahaan}) tersimpan.`
+      );
+    } catch (err) {
+      setFormError(
+        formatFirestoreErrorForUser(err, 'Gagal menyimpan penutupan tajuk.')
+      );
+    }
   };
 
   const finalizePlantSave = async (
@@ -847,7 +860,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
       );
     } catch (err) {
       setFormError(
-        err instanceof Error ? err.message : 'Gagal menyimpan data tanaman.'
+        formatFirestoreErrorForUser(err, 'Gagal menyimpan data tanaman.')
       );
     } finally {
       setSaving(false);
@@ -1987,9 +2000,9 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
           </div>
 
           {formError && (
-            <div className="rounded-xl bg-red-50 border border-red-200 p-3.5 flex items-start gap-2.5 text-sm text-red-900">
+            <div className="rounded-xl bg-red-50 border border-red-200 p-3.5 flex items-start gap-2.5 text-sm text-red-900 min-w-0">
               <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-red-700" />
-              <span>{formError}</span>
+              <span className="min-w-0 break-words">{formError}</span>
             </div>
           )}
 

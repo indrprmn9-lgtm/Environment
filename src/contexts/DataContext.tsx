@@ -24,7 +24,12 @@ import {
 } from 'firebase/firestore';
 import { checkServerReachable } from '../lib/apiClient';
 import { firestore } from '../lib/firebase';
-import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
+import {
+  formatFirestoreErrorForUser,
+  handleFirestoreError,
+  isFirestorePermissionError,
+  OperationType,
+} from '../lib/firestoreErrors';
 import {
   autoWriteDailyBackupToHandle,
   buildTodayBackupPayload,
@@ -385,7 +390,7 @@ function sliceString(text: string, size: number): string[] {
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const { profile, authStatus } = useAuth();
+  const { profile, authStatus, syncProfileSilently } = useAuth();
   const isOnline = useOnlineStatus();
 
   const [serverRecords, setServerRecords] = useState<PlantRecord[]>([]);
@@ -580,26 +585,40 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
   const ensureLocationDoc = useCallback(
     async (perusahaan: CompanyName, cleanLoc: string) => {
       if (!profile) return null;
+      const safeLoc = cleanLoc.slice(0, 100);
       const companyKey = getCompanyKey(perusahaan);
-      const lokasiKey = makeSafeKey(cleanLoc);
+      const lokasiKey = makeSafeKey(safeLoc);
       const docId = buildLocationDocId(companyKey, lokasiKey);
       const locRef = doc(firestore, 'locations_master', docId);
-      const snap = await getDoc(locRef);
+      let snap;
+      try {
+        snap = await getDoc(locRef);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.GET, `locations_master/${docId}`);
+      }
       if (!snap.exists()) {
-        await setDoc(locRef, {
-          perusahaan,
-          companyKey,
-          name: cleanLoc,
-          lokasiKey,
-          createdByUid: profile.uid,
-          createdAt: serverTimestamp(),
-        });
+        try {
+          await setDoc(locRef, {
+            perusahaan,
+            companyKey,
+            name: safeLoc,
+            lokasiKey,
+            createdByUid: profile.uid,
+            createdAt: serverTimestamp(),
+          });
+        } catch (err) {
+          handleFirestoreError(
+            err,
+            OperationType.CREATE,
+            `locations_master/${docId}`
+          );
+        }
       }
       return {
         id: docId,
         perusahaan,
         companyKey,
-        name: cleanLoc,
+        name: safeLoc,
         lokasiKey,
         createdByUid: profile.uid,
         syncStatus: 'synced' as const,
@@ -1108,8 +1127,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         cachedAt: nowIso,
         ownerUid: profile.uid,
       });
+      setLastSyncError(null);
     } catch (err) {
       console.warn('Firestore bootstrap refresh warning:', err);
+      if (isFirestorePermissionError(err)) {
+        setLastSyncError(
+          formatFirestoreErrorForUser(
+            err,
+            'Izin baca database ditolak. Silakan muat ulang atau Keluar lalu Masuk ulang dengan Google.'
+          )
+        );
+      }
     } finally {
       setIsLoading(false);
     }
@@ -2227,10 +2255,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
 
-      const cleanLoc = normalizeDisplayText(input.lokasi);
+      const cleanLoc = normalizeDisplayText(input.lokasi).slice(0, 100);
       const cleanPetak =
-        input.menuType === 'SENSUS' ? '' : normalizeDisplayText(input.nomorPetak);
-      const cleanPetugas = normalizeDisplayText(input.namaPetugas);
+        input.menuType === 'SENSUS'
+          ? ''
+          : normalizeDisplayText(input.nomorPetak).slice(0, 50);
+      const cleanPetugas = normalizeDisplayText(input.namaPetugas).slice(0, 100);
+      const cleanJenis = normalizeDisplayText(input.jenisTanaman).slice(0, 100);
+      const cleanGnssSource = input.gnssSource
+        ? input.gnssSource.trim().slice(0, 120)
+        : null;
+      const cleanCoordCrs = (input.coordCrs ?? 'EPSG:4326').trim().slice(0, 40);
       const periode = extractPeriode(input.tanggalInput);
       const companyKey = getCompanyKey(input.perusahaan);
       const lokasiKey = makeSafeKey(cleanLoc);
@@ -2277,7 +2312,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         petakKey,
         nomorTanaman: input.nomorTanaman,
         kelompokTanaman: input.kelompokTanaman,
-        jenisTanaman: input.jenisTanaman,
+        jenisTanaman: cleanJenis,
         tinggiCm: tinggiVal,
         diameterMm: diameterVal,
         kondisiTanaman: input.kondisiTanaman,
@@ -2288,11 +2323,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         altitudeM: input.altitudeM ?? null,
         horizontalAccuracyM: input.horizontalAccuracyM ?? null,
         verticalAccuracyM: input.verticalAccuracyM ?? null,
-        gnssSource: input.gnssSource ?? null,
+        gnssSource: cleanGnssSource,
         gnssOverrideReason: input.gnssOverrideReason
           ? input.gnssOverrideReason.trim().slice(0, 250)
           : null,
-        coordCrs: input.coordCrs ?? 'EPSG:4326',
+        coordCrs: cleanCoordCrs,
         photoDataUrl: input.photoDataUrl ?? null,
         createdByUid: profile.uid,
         createdByEmail: profile.email,
@@ -2316,9 +2351,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         return { savedOffline: true, record };
       }
 
-      try {
+      const writeRecordToFirestore = async () => {
         const recRef = doc(firestore, 'plant_records', id);
-        const existingSnap = await getDoc(recRef);
+        let existingSnap;
+        try {
+          existingSnap = await getDoc(recRef);
+        } catch (getErr) {
+          handleFirestoreError(getErr, OperationType.GET, `plant_records/${id}`);
+        }
         if (existingSnap.exists()) {
           const existingData = existingSnap.data();
           throw new Error(
@@ -2329,42 +2369,50 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         }
 
         const ensuredLoc = await ensureLocationDoc(input.perusahaan, cleanLoc);
-        await setDoc(recRef, {
-          perusahaan: record.perusahaan,
-          companyKey: record.companyKey,
-          menuType: record.menuType,
-          tanggalInput: record.tanggalInput,
-          waktuInput: record.waktuInput || null,
-          periode: record.periode,
-          lokasi: record.lokasi,
-          lokasiKey: record.lokasiKey,
-          namaPetugas: record.namaPetugas,
-          nomorPetak: record.nomorPetak,
-          petakKey: record.petakKey,
-          nomorTanaman: record.nomorTanaman,
-          kelompokTanaman: record.kelompokTanaman,
-          jenisTanaman: record.jenisTanaman,
-          tinggiCm: record.tinggiCm,
-          diameterMm: record.diameterMm,
-          kondisiTanaman: record.kondisiTanaman,
-          keterangan: record.keterangan,
-          extremeConfirmed: record.extremeConfirmed,
-          latitude: record.latitude,
-          longitude: record.longitude,
-          altitudeM: record.altitudeM,
-          horizontalAccuracyM: record.horizontalAccuracyM,
-          verticalAccuracyM: record.verticalAccuracyM,
-          gnssSource: record.gnssSource,
-          gnssOverrideReason: record.gnssOverrideReason,
-          coordCrs: record.coordCrs,
-          photoDataUrl: record.photoDataUrl,
-          sheetSyncedAt: null,
-          createdByUid: profile.uid,
-          createdByEmail: profile.email,
-          updatedByUid: profile.uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+        try {
+          await setDoc(recRef, {
+            perusahaan: record.perusahaan,
+            companyKey: record.companyKey,
+            menuType: record.menuType,
+            tanggalInput: record.tanggalInput,
+            waktuInput: record.waktuInput || null,
+            periode: record.periode,
+            lokasi: record.lokasi,
+            lokasiKey: record.lokasiKey,
+            namaPetugas: record.namaPetugas,
+            nomorPetak: record.nomorPetak,
+            petakKey: record.petakKey,
+            nomorTanaman: record.nomorTanaman,
+            kelompokTanaman: record.kelompokTanaman,
+            jenisTanaman: record.jenisTanaman,
+            tinggiCm: record.tinggiCm,
+            diameterMm: record.diameterMm,
+            kondisiTanaman: record.kondisiTanaman,
+            keterangan: record.keterangan,
+            extremeConfirmed: record.extremeConfirmed,
+            latitude: record.latitude,
+            longitude: record.longitude,
+            altitudeM: record.altitudeM,
+            horizontalAccuracyM: record.horizontalAccuracyM,
+            verticalAccuracyM: record.verticalAccuracyM,
+            gnssSource: record.gnssSource,
+            gnssOverrideReason: record.gnssOverrideReason,
+            coordCrs: record.coordCrs,
+            photoDataUrl: record.photoDataUrl,
+            sheetSyncedAt: null,
+            createdByUid: profile.uid,
+            createdByEmail: profile.email,
+            updatedByUid: profile.uid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } catch (setErr) {
+          handleFirestoreError(
+            setErr,
+            OperationType.CREATE,
+            `plant_records/${id}`
+          );
+        }
 
         const syncedRec: PlantRecord = { ...record, syncStatus: 'synced' };
         const nextRecords = [
@@ -2382,6 +2430,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         }
         persistSnapshotPatch({ records: nextRecords, locations: nextLocs });
         return { savedOffline: false, record: syncedRec };
+      };
+
+      try {
+        return await writeRecordToFirestore();
       } catch (err) {
         const msg = err instanceof Error ? err.message : '';
         if (
@@ -2394,7 +2446,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           queueOffline();
           return { savedOffline: true, record };
         }
-        handleFirestoreError(err, OperationType.CREATE, `plant_records/${id}`);
+        // Self-heal if users/{uid} was out-of-sync or created while offline, then retry once
+        if (isFirestorePermissionError(err)) {
+          const syncedProfile = await syncProfileSilently();
+          if (syncedProfile && syncedProfile.active) {
+            try {
+              return await writeRecordToFirestore();
+            } catch (retryErr) {
+              if (isLikelyOfflineError(retryErr)) {
+                queueOffline();
+                return { savedOffline: true, record };
+              }
+              throw retryErr;
+            }
+          }
+        }
+        throw err;
       }
     },
     [
@@ -2405,6 +2472,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       ensureLocationDoc,
       matchesUserCompany,
       persistSnapshotPatch,
+      syncProfileSilently,
     ]
   );
 

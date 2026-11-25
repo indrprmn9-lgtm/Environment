@@ -51,3 +51,47 @@ export function handleFirestoreError(
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
+
+export function isFirestorePermissionError(err: unknown): boolean {
+  const raw = err instanceof Error ? err.message : String(err || '');
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes('missing or insufficient permissions') ||
+    lower.includes('permission-denied') ||
+    lower.includes('permission_denied')
+  );
+}
+
+export function formatFirestoreErrorForUser(
+  err: unknown,
+  fallback = 'Terjadi kesalahan saat menyimpan ke database.'
+): string {
+  const raw = err instanceof Error ? err.message : String(err || '');
+  if (!raw) return fallback;
+
+  if (raw.startsWith('{') && raw.includes('"error"')) {
+    try {
+      const parsed = JSON.parse(raw) as Partial<FirestoreErrorInfo>;
+      const msgLower = String(parsed.error || '').toLowerCase();
+      if (
+        msgLower.includes('insufficient permissions') ||
+        msgLower.includes('permission')
+      ) {
+        const op = parsed.operationType ? ` (${parsed.operationType}` : '';
+        const target = parsed.path ? `${op ? ' · ' : ' ('}${parsed.path}` : '';
+        const suffix = op || target ? `${op}${target})` : '';
+        return `Izin penyimpanan ditolak oleh server database${suffix}. Silakan muat ulang halaman atau Keluar lalu Masuk ulang dengan Google, dan pastikan akun serta perusahaan tugas Anda masih aktif di daftar Petugas Admin.`;
+      }
+      if (parsed.error) return String(parsed.error);
+    } catch {
+      // fall through to raw check
+    }
+  }
+
+  if (isFirestorePermissionError(err)) {
+    return 'Izin penyimpanan ditolak oleh server database. Silakan muat ulang halaman atau Keluar lalu Masuk ulang dengan Google, dan pastikan akun Anda masih aktif di daftar Petugas Admin.';
+  }
+
+  return raw;
+}
+

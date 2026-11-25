@@ -57,6 +57,7 @@ interface AuthContextValue {
   clearSheetsToken: () => void;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
+  syncProfileSilently: () => Promise<UserProfile | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -102,7 +103,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     setSheetsAccessToken(token);
   };
 
-  const resolveUserAccess = async (user: User) => {
+  const resolveUserAccess = async (
+    user: User,
+    options?: { silent?: boolean }
+  ): Promise<UserProfile | null> => {
+    const silent = Boolean(options?.silent);
     const emailLower = (user.email || '').trim().toLowerCase();
     const isBootstrapAdmin =
       user.emailVerified && emailLower === BOOTSTRAP_ADMIN_EMAIL;
@@ -110,12 +115,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       const cached = loadCachedUserProfile(user.uid);
       if (cached) {
-        setProfile({
+        const resolvedFallback: UserProfile = {
           ...cached,
           assignedCompany: cached.assignedCompany || 'ALL',
-        });
+        };
+        setProfile(resolvedFallback);
         setAuthStatus('authorized');
-        return;
+        return resolvedFallback;
       }
       if (isBootstrapAdmin) {
         const fallbackAdmin: UserProfile = {
@@ -131,7 +137,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         };
         setProfile(fallbackAdmin);
         setAuthStatus('authorized');
-        return;
+        return fallbackAdmin;
       }
     }
 
@@ -140,7 +146,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setProfile(null);
       setAuthError('Email akun Google belum terverifikasi.');
       setAuthStatus('unauthorized');
-      return;
+      return null;
     }
 
     try {
@@ -293,7 +299,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         saveCachedUserProfile(resolved);
         setProfile(resolved);
         setAuthStatus('authorized');
-        return;
+        return resolved;
       }
 
       // Non-bootstrap user: verify via staff_whitelist
@@ -318,14 +324,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         saveCachedUserProfile(null);
         setProfile(null);
         setAuthStatus('unauthorized');
-        return;
+        return null;
       }
 
       if (staffData.active !== true) {
         saveCachedUserProfile(null);
         setProfile(null);
         setAuthStatus('inactive');
-        return;
+        return null;
       }
 
       const staffRole: UserRole =
@@ -397,6 +403,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             }
           } else if (
             existing.name !== staffName ||
+            existing.role !== staffRole ||
+            existing.staffId !== staffDocId ||
             existing.assignedCompany !== assignedCompany ||
             existing.active !== true ||
             (existing.rangeStart ?? null) !== rangeStart ||
@@ -404,6 +412,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           ) {
             await updateDoc(userRef, {
               name: staffName,
+              role: staffRole,
+              staffId: staffDocId,
               assignedCompany,
               rangeStart,
               rangeEnd,
@@ -430,17 +440,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       saveCachedUserProfile(resolved);
       setProfile(resolved);
       setAuthStatus('authorized');
+      return resolved;
     } catch (err) {
       if (isNetworkOrOfflineError(err)) {
         const cached = loadCachedUserProfile(user.uid);
         if (cached) {
-          setProfile({
+          const resolvedFallback: UserProfile = {
             ...cached,
             assignedCompany: cached.assignedCompany || 'ALL',
-          });
+          };
+          setProfile(resolvedFallback);
           setAuthStatus('authorized');
-          return;
+          return resolvedFallback;
         }
+      }
+
+      if (silent) {
+        return null;
       }
 
       let displayError =
@@ -454,6 +470,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setAuthError(displayError);
       setProfile(null);
       setAuthStatus('unauthorized');
+      return null;
     }
   };
 
@@ -471,6 +488,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       await resolveUserAccess(user);
     });
     return () => unsubscribe();
+  }, []);
+
+  // Automatically re-sync Firestore user profile whenever connection returns
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleOnline = () => {
+      if (auth.currentUser) {
+        void resolveUserAccess(auth.currentUser, { silent: true });
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
   }, []);
 
   const signInWithGoogle = async () => {
@@ -562,6 +591,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  const syncProfileSilently = async (): Promise<UserProfile | null> => {
+    if (!auth.currentUser) return null;
+    return resolveUserAccess(auth.currentUser, { silent: true });
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -575,6 +609,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         clearSheetsToken,
         logout,
         refreshProfile,
+        syncProfileSilently,
       }}
     >
       {children}

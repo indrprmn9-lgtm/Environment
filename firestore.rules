@@ -441,14 +441,13 @@ service cloud.firestore {
           (
             isVerified() &&
             request.auth.uid == userId &&
-            incoming().role == existing().role &&
-            incoming().staffId == existing().staffId &&
-            exists(/databases/$(database)/documents/staff_whitelist/$(existing().staffId)) &&
-            get(/databases/$(database)/documents/staff_whitelist/$(existing().staffId)).data.email.lower() == userEmailLower() &&
-            get(/databases/$(database)/documents/staff_whitelist/$(existing().staffId)).data.active == true &&
+            exists(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)) &&
+            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.email.lower() == userEmailLower() &&
+            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.role == incoming().role &&
+            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.assignedCompany == incoming().assignedCompany &&
+            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.active == true &&
             incoming().active == true &&
-            get(/databases/$(database)/documents/staff_whitelist/$(existing().staffId)).data.assignedCompany == incoming().assignedCompany &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'assignedCompany', 'rangeStart', 'rangeEnd', 'active', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'assignedCompany', 'rangeStart', 'rangeEnd', 'active', 'staffId', 'updatedAt'])
           )
         );
       allow delete: if isAdmin() && isValidId(userId);
