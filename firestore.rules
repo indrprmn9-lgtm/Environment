@@ -193,7 +193,7 @@ service cloud.firestore {
       isOptionalStrMax(data, 'gnssSource', 120) &&
       isOptionalStrMax(data, 'gnssOverrideReason', 250) &&
       isOptionalStrMax(data, 'coordCrs', 40) &&
-      isOptionalStrMax(data, 'photoDataUrl', 250000) &&
+      isOptionalStrMax(data, 'photoDataUrl', 350000) &&
       isOptionalStrMax(data, 'sheetSyncedAt', 40) &&
       data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
       data.createdByEmail is string && data.createdByEmail.size() >= 3 && data.createdByEmail.size() <= 150 &&
@@ -233,7 +233,7 @@ service cloud.firestore {
       isOptionalNumInRange(data, 'longitude', -180, 180) &&
       isOptionalNumInRange(data, 'horizontalAccuracyM', 0, 100000) &&
       isOptionalNumInRange(data, 'verticalAccuracyM', 0, 100000) &&
-      isOptionalStrMax(data, 'photoDataUrl', 250000) &&
+      isOptionalStrMax(data, 'photoDataUrl', 350000) &&
       data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
       data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
       data.createdAt is timestamp &&
@@ -462,15 +462,18 @@ service cloud.firestore {
       );
       allow create: if isVerified() &&
         isValidId(userId) &&
-        request.auth.uid == userId &&
         isValidAdminGrant(incoming(), userId) &&
-        incoming().email.lower() == userEmailLower() &&
         incoming().createdAt == request.time && (
-          isBootstrappedAdmin() || (
-            exists(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)) &&
-            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.email.lower() == userEmailLower() &&
-            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.role == 'admin' &&
-            get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.active == true
+          isAdmin() || (
+            request.auth.uid == userId &&
+            incoming().email.lower() == userEmailLower() && (
+              isBootstrappedAdmin() || (
+                exists(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)) &&
+                get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.email.lower() == userEmailLower() &&
+                get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.role == 'admin' &&
+                get(/databases/$(database)/documents/staff_whitelist/$(incoming().staffId)).data.active == true
+              )
+            )
           )
         );
       allow update: if false;

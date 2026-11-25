@@ -56,39 +56,15 @@ export interface CrsOptionGroup {
   options: CrsOptionItem[];
 }
 
-const UTM_NORTH_OPTIONS: CrsOptionItem[] = Array.from({ length: 60 }, (_, i) => {
-  const zone = i + 1;
-  const zz = String(zone).padStart(2, '0');
-  return {
-    code: `EPSG:326${zz}` as CoordCrsCode,
-    label: `WGS 84 / UTM Zone ${zone}N (EPSG:326${zz})`,
-  };
-});
-
-const UTM_SOUTH_OPTIONS: CrsOptionItem[] = Array.from({ length: 60 }, (_, i) => {
-  const zone = i + 1;
-  const zz = String(zone).padStart(2, '0');
-  return {
-    code: `EPSG:327${zz}` as CoordCrsCode,
-    label: `WGS 84 / UTM Zone ${zone}S (EPSG:327${zz})`,
-  };
-});
-
 export const CRS_OPTION_GROUPS: CrsOptionGroup[] = [
   {
-    label: 'Geografis & Proyeksi Web',
+    label: 'Sistem Koordinat Resmi (WGS 84 / UTM Zone 50N)',
     options: [
-      { code: 'EPSG:4326', label: 'WGS 84 Geographic (EPSG:4326)' },
-      { code: 'EPSG:3857', label: 'WGS 84 / Pseudo-Mercator (EPSG:3857)' },
+      {
+        code: 'EPSG:32650',
+        label: 'WGS 84 / UTM Zone 50N (EPSG:32650)',
+      },
     ],
-  },
-  {
-    label: 'WGS 84 / UTM Northern Hemisphere (Belahan Utara · 1N–60N)',
-    options: UTM_NORTH_OPTIONS,
-  },
-  {
-    label: 'WGS 84 / UTM Southern Hemisphere (Belahan Selatan · 1S–60S)',
-    options: UTM_SOUTH_OPTIONS,
   },
 ];
 

@@ -52,7 +52,7 @@ const GNSS_MODE_FIELDS: Array<{
 export const MasterDataView: React.FC = () => {
   const { profile } = useAuth();
   const {
-    locations,
+    masterLocations,
     petaks,
     species,
     gnssSettings,
@@ -132,16 +132,35 @@ export const MasterDataView: React.FC = () => {
   }, [gnssScope, selectedCompany, gnssSettings, getGnssSettingFor]);
 
   const companyLocations = useMemo(
-    () => locations.filter((l) => l.companyKey === companyKey),
-    [locations, companyKey]
+    () =>
+      masterLocations
+        .filter((l) => l.companyKey === companyKey)
+        .sort((a, b) =>
+          a.name.localeCompare(b.name, 'id', {
+            numeric: true,
+            sensitivity: 'base',
+          })
+        ),
+    [masterLocations, companyKey]
   );
+
+  useEffect(() => {
+    if (companyLocations.length === 0) {
+      if (petakLocation) setPetakLocation('');
+    } else if (!companyLocations.some((l) => l.name === petakLocation)) {
+      setPetakLocation(companyLocations[0].name);
+    }
+  }, [companyLocations, petakLocation]);
 
   const companyPetaks = useMemo(
     () =>
       petaks
         .filter((p) => p.companyKey === companyKey)
         .sort((a, b) =>
-          `${a.lokasi} ${a.name}`.localeCompare(`${b.lokasi} ${b.name}`, 'id')
+          `${a.lokasi} ${a.name}`.localeCompare(`${b.lokasi} ${b.name}`, 'id', {
+            numeric: true,
+            sensitivity: 'base',
+          })
         ),
     [petaks, companyKey]
   );
@@ -383,7 +402,20 @@ export const MasterDataView: React.FC = () => {
                   </span>
                   <button
                     type="button"
-                    onClick={() => void adminDeleteLocation(loc.id)}
+                    onClick={async () => {
+                      setError(null);
+                      setNotice(null);
+                      try {
+                        await adminDeleteLocation(loc.id);
+                        setNotice(`Lokasi "${loc.name}" berhasil dihapus.`);
+                      } catch (err) {
+                        setError(
+                          err instanceof Error
+                            ? err.message
+                            : 'Gagal menghapus lokasi.'
+                        );
+                      }
+                    }}
                     className="min-h-[44px] min-w-[44px] sm:min-h-[34px] sm:min-w-[34px] flex items-center justify-center rounded-lg text-stone-400 hover:bg-red-50 hover:text-red-700 shrink-0"
                     title="Hapus lokasi"
                   >
@@ -408,20 +440,31 @@ export const MasterDataView: React.FC = () => {
           </div>
 
           <form onSubmit={handleAddPetak} className="space-y-2.5">
-            <input
-              type="text"
-              list="master-petak-loc-list"
-              value={petakLocation}
+            <select
+              value={petakLocation || ''}
               onChange={(e) => setPetakLocation(e.target.value)}
-              placeholder="Pilih / ketik Lokasi (mis. Blok A-01)"
-              maxLength={100}
-              className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 px-3 text-base sm:text-xs text-[#141A15]"
-            />
-            <datalist id="master-petak-loc-list">
-              {companyLocations.map((l) => (
-                <option key={l.id} value={l.name} />
-              ))}
-            </datalist>
+              disabled={companyLocations.length === 0}
+              required
+              className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs text-[#141A15] disabled:bg-[#F6F7F4] disabled:text-stone-400"
+            >
+              {companyLocations.length === 0 ? (
+                <option value="">
+                  Daftarkan Lokasi / Blok di kolom kiri dulu
+                </option>
+              ) : (
+                companyLocations.map((l) => (
+                  <option key={l.id} value={l.name}>
+                    {l.name}
+                  </option>
+                ))
+              )}
+            </select>
+            {companyLocations.length === 0 && (
+              <p className="text-[11px] text-amber-700">
+                Tambahkan Lokasi / Blok terlebih dahulu agar Petak dapat
+                ditautkan ke lokasi resmi.
+              </p>
+            )}
             <div className="flex gap-2">
               <input
                 type="text"
@@ -429,11 +472,14 @@ export const MasterDataView: React.FC = () => {
                 onChange={(e) => setNewPetak(e.target.value)}
                 placeholder="Nomor Petak (mis. P-01)"
                 maxLength={50}
-                className="flex-1 min-w-0 min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 px-3 text-base sm:text-xs text-[#141A15]"
+                disabled={companyLocations.length === 0}
+                className="flex-1 min-w-0 min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 px-3 text-base sm:text-xs text-[#141A15] disabled:bg-[#F6F7F4]"
               />
               <button
                 type="submit"
-                disabled={busy || !newPetak.trim()}
+                disabled={
+                  busy || companyLocations.length === 0 || !newPetak.trim()
+                }
                 className="min-h-[44px] sm:min-h-[42px] px-3.5 rounded-xl bg-[#14532D] text-white text-xs font-semibold hover:bg-[#0F3F22] disabled:opacity-50 flex items-center gap-1 shrink-0 whitespace-nowrap"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -463,7 +509,22 @@ export const MasterDataView: React.FC = () => {
                   </div>
                   <button
                     type="button"
-                    onClick={() => void adminDeletePetak(pt.id)}
+                    onClick={async () => {
+                      setError(null);
+                      setNotice(null);
+                      try {
+                        await adminDeletePetak(pt.id);
+                        setNotice(
+                          `Nomor Petak "${pt.name}" (${pt.lokasi}) berhasil dihapus.`
+                        );
+                      } catch (err) {
+                        setError(
+                          err instanceof Error
+                            ? err.message
+                            : 'Gagal menghapus nomor petak.'
+                        );
+                      }
+                    }}
                     className="min-h-[44px] min-w-[44px] sm:min-h-[34px] sm:min-w-[34px] flex items-center justify-center rounded-lg text-stone-400 hover:bg-red-50 hover:text-red-700 shrink-0"
                     title="Hapus petak"
                   >
@@ -542,7 +603,18 @@ export const MasterDataView: React.FC = () => {
                 >
                   <button
                     type="button"
-                    onClick={() => void adminToggleSpecies(sp.id, !sp.active)}
+                    onClick={async () => {
+                      setError(null);
+                      try {
+                        await adminToggleSpecies(sp.id, !sp.active);
+                      } catch (err) {
+                        setError(
+                          err instanceof Error
+                            ? err.message
+                            : 'Gagal mengubah status jenis tanaman.'
+                        );
+                      }
+                    }}
                     className={`min-h-[40px] text-left font-medium min-w-0 break-words ${
                       sp.active ? 'text-[#141A15]' : 'text-stone-400 line-through'
                     }`}
@@ -552,14 +624,38 @@ export const MasterDataView: React.FC = () => {
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
-                      onClick={() => void adminToggleSpecies(sp.id, !sp.active)}
+                      onClick={async () => {
+                        setError(null);
+                        try {
+                          await adminToggleSpecies(sp.id, !sp.active);
+                        } catch (err) {
+                          setError(
+                            err instanceof Error
+                              ? err.message
+                              : 'Gagal mengubah status jenis tanaman.'
+                          );
+                        }
+                      }}
                       className="min-h-[40px] sm:min-h-[30px] px-2.5 sm:px-2 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-600 hover:bg-[#F6F7F4]"
                     >
                       {sp.active ? 'Aktif' : 'Nonaktif'}
                     </button>
                     <button
                       type="button"
-                      onClick={() => void adminDeleteSpecies(sp.id)}
+                      onClick={async () => {
+                        setError(null);
+                        setNotice(null);
+                        try {
+                          await adminDeleteSpecies(sp.id);
+                          setNotice(`Jenis "${sp.name}" berhasil dihapus.`);
+                        } catch (err) {
+                          setError(
+                            err instanceof Error
+                              ? err.message
+                              : 'Gagal menghapus jenis tanaman.'
+                          );
+                        }
+                      }}
                       className="min-h-[40px] min-w-[40px] sm:min-h-[30px] sm:min-w-[30px] flex items-center justify-center rounded-lg text-stone-400 hover:bg-red-50 hover:text-red-700"
                       title="Hapus jenis"
                     >

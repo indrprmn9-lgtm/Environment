@@ -73,7 +73,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
   const { profile } = useAuth();
   const {
     allRecords,
-    locations,
+    masterLocations,
     petaks,
     isOnline,
     getSpeciesForCompanyGroup,
@@ -129,8 +129,8 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
   const [keterangan, setKeterangan] = useState<string>('');
 
   // GNSS Capture state (Internal Smartphone GNSS — offline & online multi-mode)
-  const [crsCode, setCrsCode] = useState<CoordCrsCode>('EPSG:4326');
-  const [coordFormat, setCoordFormat] = useState<CoordFormatType>('DD');
+  const [crsCode, setCrsCode] = useState<CoordCrsCode>('EPSG:32650');
+  const [coordFormat, setCoordFormat] = useState<CoordFormatType>('UTM');
   const [gnssMode, setGnssMode] = useState<GnssCaptureMode>(() => {
     try {
       const saved = window.localStorage.getItem('env_gnss_mode');
@@ -287,13 +287,21 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
     setSuccessNotice(null);
   };
 
-  // Locations scoped to the selected company
+  // Locations strictly registered by Admin in Data Master, scoped to selected company
   const companyLocations = useMemo(
-    () => locations.filter((loc) => loc.companyKey === companyKey),
-    [locations, companyKey]
+    () =>
+      masterLocations
+        .filter((loc) => loc.companyKey === companyKey)
+        .sort((a, b) =>
+          a.name.localeCompare(b.name, 'id', {
+            numeric: true,
+            sensitivity: 'base',
+          })
+        ),
+    [masterLocations, companyKey]
   );
 
-  // Petaks scoped to company & selected location (union of Admin master petaks & recorded petaks)
+  // Petaks strictly registered by Admin in Data Master, scoped to company & selected location
   const knownPetaksInLocation = useMemo(() => {
     if (isSensus || !cleanLokasi) return [];
     const lk = makeSafeKey(cleanLokasi);
@@ -301,17 +309,29 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
     petaks
       .filter((p) => p.companyKey === companyKey && p.lokasiKey === lk)
       .forEach((p) => set.add(p.name));
-    allRecords
-      .filter(
-        (r) =>
-          r.companyKey === companyKey &&
-          r.lokasiKey === lk &&
-          r.menuType !== 'SENSUS' &&
-          Boolean(r.nomorPetak)
-      )
-      .forEach((r) => set.add(r.nomorPetak));
-    return Array.from(set).sort((a, b) => a.localeCompare(b, 'id'));
-  }, [isSensus, petaks, allRecords, companyKey, cleanLokasi]);
+    return Array.from(set).sort((a, b) =>
+      a.localeCompare(b, 'id', { numeric: true, sensitivity: 'base' })
+    );
+  }, [isSensus, petaks, companyKey, cleanLokasi]);
+
+  // Clear stale Lokasi if not registered in Data Master for active company
+  useEffect(() => {
+    if (lokasi && !companyLocations.some((l) => l.name === cleanLokasi)) {
+      setLokasi('');
+      setNomorPetak('');
+    }
+  }, [lokasi, cleanLokasi, companyLocations]);
+
+  // Clear stale Nomor Petak if not registered in Data Master for active Lokasi
+  useEffect(() => {
+    if (
+      isMonitoring &&
+      nomorPetak &&
+      (!cleanLokasi || !knownPetaksInLocation.includes(cleanPetak))
+    ) {
+      setNomorPetak('');
+    }
+  }, [isMonitoring, nomorPetak, cleanLokasi, cleanPetak, knownPetaksInLocation]);
 
   const existingFieldCondition = useMemo(() => {
     if (!isMonitoring || !cleanLokasi) return undefined;
@@ -929,17 +949,33 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
     setFormError(null);
     setSuccessNotice(null);
 
-    if (!cleanLokasi) {
-      setFormError('Lokasi wajib diisi.');
+    if (companyLocations.length === 0) {
+      setFormError(
+        `Belum ada Lokasi / Blok yang didaftarkan Administrator untuk ${perusahaan}. Hubungi Admin untuk mengisi Data Master terlebih dahulu.`
+      );
+      return;
+    }
+    if (!cleanLokasi || !companyLocations.some((l) => l.name === cleanLokasi)) {
+      setFormError('Pilih Lokasi / Blok resmi dari daftar yang disediakan.');
       return;
     }
     if (!normalizeDisplayText(namaPetugas)) {
       setFormError('Nama Petugas wajib diisi.');
       return;
     }
-    if (isMonitoring && !cleanPetak) {
-      setFormError('Nomor Petak wajib diisi pada menu Monitoring.');
-      return;
+    if (isMonitoring) {
+      if (knownPetaksInLocation.length === 0) {
+        setFormError(
+          `Belum ada Nomor Petak terdaftar di lokasi "${cleanLokasi}". Hubungi Admin untuk mendaftarkan di Data Master.`
+        );
+        return;
+      }
+      if (!cleanPetak || !knownPetaksInLocation.includes(cleanPetak)) {
+        setFormError(
+          'Pilih Nomor Petak resmi dari daftar yang didaftarkan Administrator.'
+        );
+        return;
+      }
     }
     if (!parsedNomorTanaman) {
       setFormError(
@@ -1157,32 +1193,51 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
 
             <div className="space-y-1.5 sm:col-span-2">
               <label className="block text-xs font-semibold text-stone-800">
-                Lokasi / Blok ({perusahaan})
+                Lokasi / Blok ({perusahaan}) · Wajib dari Data Master
               </label>
-              <input
-                type="text"
-                list="locations-master-list"
-                value={lokasi}
-                onChange={(e) => setLokasi(e.target.value)}
-                placeholder={`Pilih lokasi ${perusahaan} atau ketik lokasi baru (misal: Blok A-1)`}
-                maxLength={100}
+              <select
+                value={
+                  companyLocations.some((l) => l.name === cleanLokasi)
+                    ? cleanLokasi
+                    : ''
+                }
+                onChange={(e) => {
+                  setLokasi(e.target.value);
+                  setNomorPetak('');
+                }}
+                disabled={companyLocations.length === 0}
                 required
-                className="w-full min-h-[46px] rounded-xl border border-stone-300 bg-white px-3.5 text-base sm:text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
-              />
-              <datalist id="locations-master-list">
+                className="w-full min-h-[46px] rounded-xl border border-stone-300 bg-white px-3.5 text-base sm:text-sm text-[#141A15] focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D] disabled:bg-[#F6F7F4] disabled:text-stone-400"
+              >
+                <option value="">
+                  {companyLocations.length === 0
+                    ? `-- Belum ada lokasi terdaftar untuk ${perusahaan} --`
+                    : `-- Pilih Lokasi / Blok (${companyLocations.length} tersedia) --`}
+                </option>
                 {companyLocations.map((loc) => (
-                  <option key={loc.id} value={loc.name} />
+                  <option key={loc.id} value={loc.name}>
+                    {loc.name}
+                  </option>
                 ))}
-              </datalist>
-              {companyLocations.length > 0 && (
+              </select>
+              {companyLocations.length === 0 ? (
+                <p className="text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+                  Belum ada Lokasi / Blok yang didaftarkan Administrator untuk{' '}
+                  <strong>{perusahaan}</strong>. Hubungi Admin agar menambahkannya
+                  di menu <strong>Data Master</strong>.
+                </p>
+              ) : (
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   {companyLocations.slice(0, 8).map((loc) => (
                     <button
                       key={loc.id}
                       type="button"
-                      onClick={() => setLokasi(loc.name)}
+                      onClick={() => {
+                        setLokasi(loc.name);
+                        setNomorPetak('');
+                      }}
                       className={`min-h-[34px] px-3 py-1 rounded-lg text-xs font-medium border transition-colors ${
-                        cleanLokasi.toLowerCase() === loc.name.toLowerCase()
+                        cleanLokasi === loc.name
                           ? 'bg-[#14532D] text-white border-[#14532D]'
                           : 'bg-[#F6F7F4] text-stone-700 border-stone-200 hover:bg-stone-200/70'
                       }`}
@@ -1376,40 +1431,56 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
             {isMonitoring && (
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-stone-800">
-                  Nomor Petak
+                  Nomor Petak · Wajib dari Data Master
                 </label>
-                <input
-                  type="text"
-                  list="petaks-master-list"
-                  value={nomorPetak}
+                <select
+                  value={
+                    knownPetaksInLocation.includes(cleanPetak) ? cleanPetak : ''
+                  }
                   onChange={(e) => setNomorPetak(e.target.value)}
-                  placeholder="Contoh: P-01 atau Petak 1"
-                  maxLength={50}
+                  disabled={!cleanLokasi || knownPetaksInLocation.length === 0}
                   required
-                  className="w-full min-h-[46px] rounded-xl border border-stone-300 bg-white px-3.5 text-base sm:text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
-                />
-                <datalist id="petaks-master-list">
+                  className="w-full min-h-[46px] rounded-xl border border-stone-300 bg-white px-3.5 text-base sm:text-sm text-[#141A15] focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D] disabled:bg-[#F6F7F4] disabled:text-stone-400"
+                >
+                  <option value="">
+                    {!cleanLokasi
+                      ? '-- Pilih Lokasi / Blok terlebih dahulu --'
+                      : knownPetaksInLocation.length === 0
+                      ? `-- Belum ada petak di "${cleanLokasi}" --`
+                      : `-- Pilih Nomor Petak (${knownPetaksInLocation.length} tersedia) --`}
+                  </option>
                   {knownPetaksInLocation.map((pt) => (
-                    <option key={pt} value={pt} />
+                    <option key={pt} value={pt}>
+                      {pt}
+                    </option>
                   ))}
-                </datalist>
-                {knownPetaksInLocation.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {knownPetaksInLocation.slice(0, 8).map((pt) => (
-                      <button
-                        key={pt}
-                        type="button"
-                        onClick={() => setNomorPetak(pt)}
-                        className={`min-h-[34px] px-3 py-1 rounded-lg text-xs font-medium border transition-colors ${
-                          cleanPetak.toLowerCase() === pt.toLowerCase()
-                            ? 'bg-[#14532D] text-white border-[#14532D]'
-                            : 'bg-[#F6F7F4] text-stone-700 border-stone-200 hover:bg-stone-200/70'
-                        }`}
-                      >
-                        {pt}
-                      </button>
-                    ))}
-                  </div>
+                </select>
+                {cleanLokasi && knownPetaksInLocation.length === 0 ? (
+                  <p className="text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+                    Belum ada Nomor Petak terdaftar di lokasi{' '}
+                    <strong>{cleanLokasi}</strong> ({perusahaan}). Hubungi
+                    Administrator untuk mendaftarkannya di{' '}
+                    <strong>Data Master</strong>.
+                  </p>
+                ) : (
+                  knownPetaksInLocation.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {knownPetaksInLocation.slice(0, 8).map((pt) => (
+                        <button
+                          key={pt}
+                          type="button"
+                          onClick={() => setNomorPetak(pt)}
+                          className={`min-h-[34px] px-3 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                            cleanPetak === pt
+                              ? 'bg-[#14532D] text-white border-[#14532D]'
+                              : 'bg-[#F6F7F4] text-stone-700 border-stone-200 hover:bg-stone-200/70'
+                          }`}
+                        >
+                          {pt}
+                        </button>
+                      ))}
+                    </div>
+                  )
                 )}
               </div>
             )}
@@ -2019,7 +2090,12 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
 
           <button
             type="submit"
-            disabled={saving || duplicateCheck.isDuplicate}
+            disabled={
+              saving ||
+              duplicateCheck.isDuplicate ||
+              companyLocations.length === 0 ||
+              (isMonitoring && knownPetaksInLocation.length === 0)
+            }
             className="w-full min-h-[52px] flex items-center justify-center gap-2 rounded-xl bg-[#14532D] px-6 py-3.5 text-sm font-semibold text-white hover:bg-[#0F3F22] disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.99]"
           >
             <Save className="w-4 h-4" />

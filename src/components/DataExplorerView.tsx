@@ -65,8 +65,10 @@ export const DataExplorerView: React.FC = () => {
     isSyncing,
     lastSyncAt,
     pendingCount,
+    otherCompanyPendingCount,
     conflictCount,
     getSpeciesForCompanyGroup,
+    getEvalSettingFor,
     syncPendingQueue,
     refreshData,
     fetchPaginatedRecords,
@@ -324,6 +326,7 @@ export const DataExplorerView: React.FC = () => {
         const compRecords = allRecords.filter(
           (r) => r.perusahaan === perusahaan
         );
+        const evalTh = getEvalSettingFor(perusahaan);
         const { syncCompanyDataToSpreadsheet } = await import(
           '../lib/googleSheetsSync'
         );
@@ -334,6 +337,11 @@ export const DataExplorerView: React.FC = () => {
           records: allRecords,
           fieldConditions,
           canopyCovers,
+          thresholds: {
+            enabled: evalTh.enabled,
+            minSurvivalPct: evalTh.minSurvivalPct,
+            minDeltaHeightCm: evalTh.minDeltaHeightCm,
+          },
         });
         await saveCompanySpreadsheet({
           perusahaan,
@@ -615,6 +623,28 @@ export const DataExplorerView: React.FC = () => {
             className="font-semibold hover:underline"
           >
             Tutup
+          </button>
+        </div>
+      )}
+
+      {otherCompanyPendingCount > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+            <span>
+              Terdapat <strong>{otherCompanyPendingCount} data antrean offline</strong>{' '}
+              dari perusahaan penugasan sebelumnya yang belum terunggah sebelum
+              perpindahan PT. Ekspor cadangan JSON agar data tetap aman atau
+              hubungi Administrator jika perlu diunggah sementara.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={exportOfflineBackup}
+            className="min-h-[36px] px-3 py-1.5 rounded-lg border border-amber-300 bg-white text-xs font-semibold text-amber-900 hover:bg-amber-100 shrink-0 flex items-center gap-1.5"
+          >
+            <HardDriveDownload className="w-3.5 h-3.5" />
+            Ekspor Antrean (.json)
           </button>
         </div>
       )}

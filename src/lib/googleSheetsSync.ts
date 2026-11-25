@@ -200,7 +200,6 @@ export async function createCompanySpreadsheet(
     body: JSON.stringify({
       properties: {
         title: `Environment - ${perusahaan}`,
-        locale: 'id_ID',
       },
       sheets: SHEET_TABS.map((title) => ({
         properties: { title },
@@ -289,7 +288,7 @@ export async function syncCompanyDataToSpreadsheet(params: {
     {
       method: 'POST',
       body: JSON.stringify({
-        ranges: SHEET_TABS.map((t) => `${t}!A1:Z10000`),
+        ranges: SHEET_TABS.map((t) => `${t}!A:Z`),
       }),
     }
   );

@@ -182,6 +182,7 @@ interface DataContextValue {
   fieldConditions: FieldCondition[];
   canopyCovers: CanopyCover[];
   locations: LocationMaster[];
+  masterLocations: LocationMaster[];
   petaks: PetakMaster[];
   species: SpeciesMaster[];
   companySpreadsheets: CompanySpreadsheet[];
@@ -190,6 +191,7 @@ interface DataContextValue {
   gnssSettings: GnssAccuracySettings[];
   staffList: StaffMember[];
   pendingCount: number;
+  otherCompanyPendingCount: number;
   conflictCount: number;
   getSpeciesForCompanyGroup: (
     perusahaan: CompanyName,
@@ -473,6 +475,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
     staffList,
   ]);
 
+  const lastCompanyRef = useRef<string>('');
+
   const persistSnapshotPatch = useCallback(
     (
       patch: Partial<{
@@ -480,6 +484,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         fieldConditions: FieldCondition[];
         canopyCovers: CanopyCover[];
         locations: LocationMaster[];
+        petaks: PetakMaster[];
+        species: SpeciesMaster[];
+        baseMaps: BaseMapLayer[];
+        evalSettings: GrowthEvalSettings[];
+        gnssSettings: GnssAccuracySettings[];
       }>
     ) => {
       if (!profile?.uid) return;
@@ -632,21 +641,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (authStatus !== 'authorized' || !profile || !profile.active) return;
       if (!isOnline) return;
 
-      if (!force && profile.role !== 'admin') {
-        const meta = snapshotMetaRef.current;
-        if (meta.ownerUid === profile.uid && meta.cachedAt) {
-          const ageMs = Date.now() - new Date(meta.cachedAt).getTime();
-          if (
-            Number.isFinite(ageMs) &&
-            ageMs >= 0 &&
-            ageMs < OFFICER_REFRESH_COOLDOWN_MS
-          ) {
-            setIsLoading(false);
-            return;
-          }
-        }
-      }
-
       const assignedCompany = profile.assignedCompany || 'ALL';
       const isCompanyScoped =
         profile.role !== 'admin' && assignedCompany !== 'ALL';
@@ -678,6 +672,186 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             ])
           )
         : collection(firestore, 'gnss_accuracy_settings');
+
+      if (!force && profile.role !== 'admin') {
+        const meta = snapshotMetaRef.current;
+        if (meta.ownerUid === profile.uid && meta.cachedAt) {
+          const ageMs = Date.now() - new Date(meta.cachedAt).getTime();
+          if (
+            Number.isFinite(ageMs) &&
+            ageMs >= 0 &&
+            ageMs < OFFICER_REFRESH_COOLDOWN_MS
+          ) {
+            // Lightweight refresh of Admin Master Data, Base Maps & policies so officer views stay current without heavy plant_records reads
+            try {
+              const [locSnap, petakSnap, speciesSnap, baseMapSnap, evalSnap, gnssSnap] =
+                await Promise.all([
+                  getDocs(scopedQuery('locations_master')),
+                  getDocs(scopedQuery('petaks_master')),
+                  getDocs(scopedQuery('species_master')),
+                  getDocs(scopedQuery('base_map_layers')),
+                  getDocs(evalQuery),
+                  getDocs(gnssQuery),
+                ]);
+
+              const locs: LocationMaster[] = locSnap.docs
+                .map((d) => {
+                  const data = d.data();
+                  return {
+                    id: d.id,
+                    perusahaan: resolveCompanyName(String(data.perusahaan || '')),
+                    companyKey: String(data.companyKey || ''),
+                    name: String(data.name || ''),
+                    lokasiKey: String(data.lokasiKey || ''),
+                    createdByUid: String(data.createdByUid || ''),
+                    createdAt: serializeTimestamp(data.createdAt),
+                    syncStatus: 'synced' as const,
+                  };
+                })
+                .filter((l) => matchesCompany(l.perusahaan));
+
+              const petakList: PetakMaster[] = petakSnap.docs
+                .map((d) => {
+                  const data = d.data();
+                  return {
+                    id: d.id,
+                    perusahaan: resolveCompanyName(String(data.perusahaan || '')),
+                    companyKey: String(data.companyKey || ''),
+                    lokasi: String(data.lokasi || ''),
+                    lokasiKey: String(data.lokasiKey || ''),
+                    name: String(data.name || ''),
+                    petakKey: String(data.petakKey || ''),
+                    createdByUid: String(data.createdByUid || ''),
+                    createdAt: serializeTimestamp(data.createdAt),
+                  };
+                })
+                .filter((p) => matchesCompany(p.perusahaan));
+
+              const speciesList: SpeciesMaster[] = speciesSnap.docs
+                .map((d) => {
+                  const data = d.data();
+                  return {
+                    id: d.id,
+                    perusahaan: resolveCompanyName(String(data.perusahaan || '')),
+                    companyKey: String(data.companyKey || ''),
+                    kelompokTanaman: data.kelompokTanaman as PlantGroup,
+                    name: String(data.name || ''),
+                    speciesKey: String(data.speciesKey || ''),
+                    active: data.active !== false,
+                    createdByUid: String(data.createdByUid || ''),
+                    createdAt: serializeTimestamp(data.createdAt),
+                  };
+                })
+                .filter((s) => matchesCompany(s.perusahaan));
+
+              const mapList: BaseMapLayer[] = baseMapSnap.docs
+                .map((d) => {
+                  const data = d.data();
+                  return {
+                    id: d.id,
+                    perusahaan: resolveCompanyName(String(data.perusahaan || '')),
+                    companyKey: String(data.companyKey || ''),
+                    name: String(data.name || ''),
+                    fileType: data.fileType as BaseMapFileType,
+                    crsCode: (data.crsCode || 'EPSG:4326') as CoordCrsCode,
+                    fileDataBase64: data.fileDataBase64
+                      ? String(data.fileDataBase64)
+                      : null,
+                    geoJsonText: data.geoJsonText
+                      ? String(data.geoJsonText)
+                      : null,
+                    bboxJson: data.bboxJson ? String(data.bboxJson) : null,
+                    chunkCount:
+                      typeof data.chunkCount === 'number'
+                        ? data.chunkCount
+                        : null,
+                    labelEnabled: Boolean(data.labelEnabled),
+                    labelAttributes: Array.isArray(data.labelAttributes)
+                      ? data.labelAttributes
+                          .map((v: unknown) => String(v))
+                          .filter(Boolean)
+                          .slice(0, 15)
+                      : [],
+                    availableAttributes: Array.isArray(data.availableAttributes)
+                      ? data.availableAttributes
+                          .map((v: unknown) => String(v))
+                          .filter(Boolean)
+                          .slice(0, 100)
+                      : [],
+                    uploadedByUid: String(data.uploadedByUid || ''),
+                    createdAt: serializeTimestamp(data.createdAt),
+                  };
+                })
+                .filter((m) => matchesCompany(m.perusahaan))
+                .sort((a, b) =>
+                  String(b.createdAt || '').localeCompare(
+                    String(a.createdAt || '')
+                  )
+                );
+
+              const evalList: GrowthEvalSettings[] = evalSnap.docs.map((d) => {
+                const data = d.data();
+                return {
+                  companyKey: String(data.companyKey || d.id),
+                  enabled: data.enabled !== false,
+                  minSurvivalPct: Number(data.minSurvivalPct ?? 80),
+                  minDeltaHeightCm: Number(data.minDeltaHeightCm ?? 2),
+                  updatedByUid: data.updatedByUid
+                    ? String(data.updatedByUid)
+                    : undefined,
+                  updatedAt: serializeTimestamp(data.updatedAt),
+                };
+              });
+
+              const gnssList: GnssAccuracySettings[] = gnssSnap.docs.map((d) => {
+                const data = d.data();
+                const defMax = Number(
+                  data.defaultMaxAccuracyM ?? MAX_GNSS_ACCURACY_M
+                );
+                const mt = (data.modeThresholds || {}) as Record<
+                  string,
+                  unknown
+                >;
+                return {
+                  companyKey: String(data.companyKey || d.id),
+                  enforced: data.enforced !== false,
+                  defaultMaxAccuracyM: defMax,
+                  modeThresholds: {
+                    optimal: Number(mt.optimal ?? defMax),
+                    precision_static: Number(mt.precision_static ?? defMax),
+                    continuous: Number(mt.continuous ?? defMax),
+                    fast: Number(mt.fast ?? defMax),
+                  },
+                  updatedByUid: data.updatedByUid
+                    ? String(data.updatedByUid)
+                    : undefined,
+                  updatedAt: serializeTimestamp(data.updatedAt),
+                };
+              });
+
+              setServerLocations(locs);
+              setPetaks(petakList);
+              setSpecies(speciesList);
+              setBaseMaps(mapList);
+              setEvalSettings(evalList);
+              setGnssSettings(gnssList);
+              persistSnapshotPatch({
+                locations: locs,
+                petaks: petakList,
+                species: speciesList,
+                baseMaps: mapList,
+                evalSettings: evalList,
+                gnssSettings: gnssList,
+              });
+            } catch (lightErr) {
+              console.warn('Master/BaseMap refresh warning:', lightErr);
+            } finally {
+              setIsLoading(false);
+            }
+            return;
+          }
+        }
+      }
 
       setIsLoading(true);
       try {
@@ -1141,11 +1315,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [authStatus, profile, isOnline]);
+  }, [authStatus, profile, isOnline, persistSnapshotPatch]);
 
   useEffect(() => {
     if (!queueHydrated) return;
     if (authStatus !== 'authorized' || !profile || !profile.active) {
+      lastCompanyRef.current = '';
       setServerRecords([]);
       setServerFieldConditions([]);
       setServerCanopyCovers([]);
@@ -1160,10 +1335,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       setIsLoading(false);
       return;
     }
+    const currentCompany = profile.assignedCompany || 'ALL';
+    const companyChanged =
+      Boolean(lastCompanyRef.current) && lastCompanyRef.current !== currentCompany;
+    lastCompanyRef.current = currentCompany;
+
     const snapshotOwnerMismatch =
       Boolean(snapshotMetaRef.current.ownerUid) &&
       snapshotMetaRef.current.ownerUid !== profile.uid;
-    if (snapshotOwnerMismatch) {
+    if (snapshotOwnerMismatch || companyChanged) {
       setServerRecords([]);
       setServerFieldConditions([]);
       setServerCanopyCovers([]);
@@ -1177,7 +1357,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       setStaffList([]);
     }
     if (isOnline) {
-      void refreshData(snapshotOwnerMismatch);
+      void refreshData(snapshotOwnerMismatch || companyChanged);
     } else {
       setIsLoading(false);
     }
@@ -1257,7 +1437,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
     return Array.from(map.values());
   }, [serverCanopyCovers, offlineQueue.canopyCovers, matchesUserCompany]);
 
-  const locations = useMemo(() => {
+  const masterLocations = useMemo(() => {
     const map = new Map<string, LocationMaster>();
     serverLocations.forEach((loc) => {
       if (!matchesUserCompany(loc.perusahaan)) return;
@@ -1272,6 +1452,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       if (!map.has(docKey)) {
         map.set(docKey, { ...loc, id: docKey, perusahaan, companyKey });
       }
+    });
+    return Array.from(map.values()).sort((a, b) =>
+      a.name.localeCompare(b.name, 'id', { numeric: true, sensitivity: 'base' })
+    );
+  }, [serverLocations, offlineQueue.locations, matchesUserCompany]);
+
+  const locations = useMemo(() => {
+    const map = new Map<string, LocationMaster>();
+    masterLocations.forEach((loc) => {
+      map.set(loc.id, loc);
     });
     allRecords.forEach((r) => {
       if (!matchesUserCompany(r.perusahaan)) return;
@@ -1289,14 +1479,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
     });
     return Array.from(map.values()).sort((a, b) =>
-      a.name.localeCompare(b.name, 'id')
+      a.name.localeCompare(b.name, 'id', { numeric: true, sensitivity: 'base' })
     );
-  }, [
-    serverLocations,
-    offlineQueue.locations,
-    allRecords,
-    matchesUserCompany,
-  ]);
+  }, [masterLocations, allRecords, matchesUserCompany]);
 
   const scopedPetaks = useMemo(
     () => petaks.filter((p) => matchesUserCompany(p.perusahaan)),
@@ -1342,6 +1527,25 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       ).length +
       offlineQueue.locations.filter((l) =>
         matchesUserCompany(resolveCompanyName(l.perusahaan))
+      ).length,
+    [offlineQueue, matchesUserCompany]
+  );
+
+  const otherCompanyPendingCount = useMemo(
+    () =>
+      offlineQueue.plantRecords.filter(
+        (r) =>
+          r.syncStatus === 'pending' &&
+          !matchesUserCompany(resolveCompanyName(r.perusahaan))
+      ).length +
+      offlineQueue.fieldConditions.filter(
+        (fc) => !matchesUserCompany(resolveCompanyName(fc.perusahaan))
+      ).length +
+      offlineQueue.canopyCovers.filter(
+        (cc) => !matchesUserCompany(resolveCompanyName(cc.perusahaan))
+      ).length +
+      offlineQueue.locations.filter(
+        (l) => !matchesUserCompany(resolveCompanyName(l.perusahaan))
       ).length,
     [offlineQueue, matchesUserCompany]
   );
@@ -1427,7 +1631,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       let conflictsTotal = 0;
       let encounteredError: string | undefined;
 
-      try {
+      const executeQueueSyncPass = async () => {
+        const latestQueue = queueRef.current;
+        const passLocs = latestQueue.locations.filter((l) =>
+          matchesUserCompany(resolveCompanyName(l.perusahaan))
+        );
+        const passConds = latestQueue.fieldConditions.filter((fc) =>
+          matchesUserCompany(resolveCompanyName(fc.perusahaan))
+        );
+        const passCanopies = latestQueue.canopyCovers.filter((cc) =>
+          matchesUserCompany(resolveCompanyName(cc.perusahaan))
+        );
+        const passPlants = latestQueue.plantRecords.filter(
+          (r) =>
+            r.syncStatus === 'pending' &&
+            matchesUserCompany(resolveCompanyName(r.perusahaan))
+        );
+
         const syncedLocItems: LocationMaster[] = [];
         const syncedCondItems: FieldCondition[] = [];
         const syncedCanopyItems: CanopyCover[] = [];
@@ -1435,7 +1655,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
 
         // 1. Locations
         const locDone = new Set<string>();
-        for (const loc of scopedLocs) {
+        for (const loc of passLocs) {
           const perusahaan = resolveCompanyName(loc.perusahaan);
           const cleanName = normalizeDisplayText(loc.name);
           const res = await ensureLocationDoc(perusahaan, cleanName);
@@ -1454,7 +1674,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
 
         // 2. Field conditions
         const fcDone = new Set<string>();
-        for (const fc of scopedConds) {
+        for (const fc of passConds) {
           const perusahaan = resolveCompanyName(fc.perusahaan);
           const cleanLoc = normalizeDisplayText(fc.lokasi);
           const companyKey = fc.companyKey || getCompanyKey(perusahaan);
@@ -1539,7 +1759,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
 
         // 3. Canopy covers
         const ccDone = new Set<string>();
-        for (const cc of scopedCanopies) {
+        for (const cc of passCanopies) {
           const perusahaan = resolveCompanyName(cc.perusahaan);
           const cleanLoc = normalizeDisplayText(cc.lokasi);
           const cleanPetak = normalizeDisplayText(cc.nomorPetak);
@@ -1609,7 +1829,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         // 4. Plant records (check existence first to guard duplicate numbers)
         const syncedPlantSet = new Set<string>();
         const conflictReasons = new Map<string, string>();
-        for (const rec of pendingPlants) {
+        for (const rec of passPlants) {
           const perusahaan = resolveCompanyName(rec.perusahaan);
           const cleanLoc = normalizeDisplayText(rec.lokasi);
           const cleanPetak =
@@ -1792,14 +2012,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         if (Object.keys(snapshotPatch).length > 0) {
           persistSnapshotPatch(snapshotPatch);
         }
+      };
+
+      try {
+        try {
+          await executeQueueSyncPass();
+        } catch (firstErr) {
+          if (isFirestorePermissionError(firstErr)) {
+            const syncedProfile = await syncProfileSilently();
+            if (syncedProfile && syncedProfile.active) {
+              await executeQueueSyncPass();
+            } else {
+              throw firstErr;
+            }
+          } else {
+            throw firstErr;
+          }
+        }
 
         setLastSyncAt(new Date());
         autoRetryCountRef.current = 0;
       } catch (err) {
-        encounteredError =
-          err instanceof Error
-            ? err.message
-            : 'Gagal mengunggah antrean offline ke database.';
+        encounteredError = formatFirestoreErrorForUser(
+          err,
+          'Gagal mengunggah antrean offline ke database.'
+        );
         setLastSyncError(encounteredError);
       } finally {
         syncLockRef.current = false;
@@ -1818,6 +2055,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       ensureLocationDoc,
       matchesUserCompany,
       persistSnapshotPatch,
+      syncProfileSilently,
     ]
   );
 
@@ -2076,7 +2314,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         return { savedOffline: true };
       }
 
-      try {
+      const writeFieldConditionToFirestore = async (): Promise<{
+        savedOffline: boolean;
+      }> => {
         await ensureLocationDoc(input.perusahaan, cleanLoc);
         const fcRef = doc(firestore, 'field_conditions', id);
         const existing = await getDoc(fcRef);
@@ -2126,10 +2366,32 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         setServerFieldConditions(nextConds);
         persistSnapshotPatch({ fieldConditions: nextConds });
         return { savedOffline: false };
+      };
+
+      try {
+        return await writeFieldConditionToFirestore();
       } catch (err) {
         if (isLikelyOfflineError(err)) {
           queueOffline();
           return { savedOffline: true };
+        }
+        if (isFirestorePermissionError(err)) {
+          const syncedProfile = await syncProfileSilently();
+          if (syncedProfile && syncedProfile.active) {
+            try {
+              return await writeFieldConditionToFirestore();
+            } catch (retryErr) {
+              if (isLikelyOfflineError(retryErr)) {
+                queueOffline();
+                return { savedOffline: true };
+              }
+              handleFirestoreError(
+                retryErr,
+                OperationType.WRITE,
+                `field_conditions/${id}`
+              );
+            }
+          }
         }
         handleFirestoreError(err, OperationType.WRITE, `field_conditions/${id}`);
       }
@@ -2141,6 +2403,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       ensureLocationDoc,
       matchesUserCompany,
       persistSnapshotPatch,
+      syncProfileSilently,
     ]
   );
 
@@ -2196,7 +2459,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         return { savedOffline: true };
       }
 
-      try {
+      const writeCanopyToFirestore = async (): Promise<{
+        savedOffline: boolean;
+      }> => {
         const ccRef = doc(firestore, 'canopy_covers', id);
         const existing = await getDoc(ccRef);
         if (!existing.exists()) {
@@ -2233,15 +2498,44 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         setServerCanopyCovers(nextCanopies);
         persistSnapshotPatch({ canopyCovers: nextCanopies });
         return { savedOffline: false };
+      };
+
+      try {
+        return await writeCanopyToFirestore();
       } catch (err) {
         if (isLikelyOfflineError(err)) {
           queueOffline();
           return { savedOffline: true };
         }
+        if (isFirestorePermissionError(err)) {
+          const syncedProfile = await syncProfileSilently();
+          if (syncedProfile && syncedProfile.active) {
+            try {
+              return await writeCanopyToFirestore();
+            } catch (retryErr) {
+              if (isLikelyOfflineError(retryErr)) {
+                queueOffline();
+                return { savedOffline: true };
+              }
+              handleFirestoreError(
+                retryErr,
+                OperationType.WRITE,
+                `canopy_covers/${id}`
+              );
+            }
+          }
+        }
         handleFirestoreError(err, OperationType.WRITE, `canopy_covers/${id}`);
       }
     },
-    [profile, isOnline, mutateQueue, matchesUserCompany, persistSnapshotPatch]
+    [
+      profile,
+      isOnline,
+      mutateQueue,
+      matchesUserCompany,
+      persistSnapshotPatch,
+      syncProfileSilently,
+    ]
   );
 
   const savePlantRecord = useCallback(
@@ -2560,22 +2854,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   const exportOfflineBackup = useCallback(() => {
-    const q = queueRef.current;
-    exportOfflineQueueBackup({
-      plantRecords: q.plantRecords.filter((r) =>
-        matchesUserCompany(resolveCompanyName(r.perusahaan))
-      ),
-      fieldConditions: q.fieldConditions.filter((fc) =>
-        matchesUserCompany(resolveCompanyName(fc.perusahaan))
-      ),
-      canopyCovers: q.canopyCovers.filter((cc) =>
-        matchesUserCompany(resolveCompanyName(cc.perusahaan))
-      ),
-      locations: q.locations.filter((l) =>
-        matchesUserCompany(resolveCompanyName(l.perusahaan))
-      ),
-    });
-  }, [matchesUserCompany]);
+    exportOfflineQueueBackup(queueRef.current);
+  }, []);
 
   const exportTodayBackup = useCallback(async () => {
     const payload = buildTodayBackupPayload({
@@ -2831,6 +3111,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       const cleanName = normalizeDisplayText(updates.name).slice(0, 100);
       const staffRef = doc(firestore, 'staff_whitelist', staffId);
       try {
+        const staffSnap = await getDoc(staffRef);
+        const staffEmail = String(staffSnap.data()?.email || '')
+          .trim()
+          .toLowerCase();
+
         await updateDoc(staffRef, {
           name: cleanName,
           role: updates.role,
@@ -2841,16 +3126,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           updatedAt: serverTimestamp(),
         });
 
-        // Sync linked users & admins documents if staff has signed in
-        const linkedUsers = await getDocs(
+        // Sync linked users & admins documents by BOTH staffId and email so transfers/promotions never go stale
+        const byStaffIdSnap = await getDocs(
           query(collection(firestore, 'users'), where('staffId', '==', staffId))
         );
-        for (const uDoc of linkedUsers.docs) {
+        const userDocsMap = new Map(byStaffIdSnap.docs.map((d) => [d.id, d]));
+        if (staffEmail) {
+          const byEmailSnap = await getDocs(
+            query(
+              collection(firestore, 'users'),
+              where('email', '==', staffEmail)
+            )
+          );
+          byEmailSnap.docs.forEach((d) => {
+            if (!userDocsMap.has(d.id)) {
+              userDocsMap.set(d.id, d);
+            }
+          });
+        }
+
+        for (const uDoc of userDocsMap.values()) {
           const uData = uDoc.data();
           await updateDoc(uDoc.ref, {
             name: cleanName,
             role: updates.role,
-            assignedCompany: updates.assignedCompany || 'ALL',
+            assignedCompany: targetCompany,
             rangeStart: updates.rangeStart ?? null,
             rangeEnd: updates.rangeEnd ?? null,
             active: updates.active,
@@ -2863,7 +3163,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             if (!adminSnap.exists()) {
               await setDoc(adminGrantRef, {
                 uid: uDoc.id,
-                email: String(uData.email || ''),
+                email: String(uData.email || staffEmail || ''),
                 staffId,
                 createdAt: serverTimestamp(),
               });
@@ -2880,7 +3180,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
                   ...s,
                   name: cleanName,
                   role: updates.role,
-                  assignedCompany: updates.assignedCompany || 'ALL',
+                  assignedCompany: targetCompany,
                   rangeStart: updates.rangeStart ?? null,
                   rangeEnd: updates.rangeEnd ?? null,
                   active: updates.active,
@@ -2977,16 +3277,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       try {
         const created = await ensureLocationDoc(perusahaan, cleanName);
         if (created) {
-          setServerLocations((prev) => [
-            ...prev.filter((l) => l.id !== created.id),
+          const nextLocs = [
+            ...snapshotDataRef.current.locations.filter(
+              (l) => l.id !== created.id
+            ),
             created,
-          ]);
+          ];
+          setServerLocations(nextLocs);
+          persistSnapshotPatch({ locations: nextLocs });
         }
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, 'locations_master');
       }
     },
-    [profile, ensureLocationDoc]
+    [profile, ensureLocationDoc, persistSnapshotPatch]
   );
 
   const adminDeleteLocation = useCallback(
@@ -2996,7 +3300,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
       try {
         await deleteDoc(doc(firestore, 'locations_master', id));
-        setServerLocations((prev) => prev.filter((l) => l.id !== id));
+        const nextLocs = snapshotDataRef.current.locations.filter(
+          (l) => l.id !== id
+        );
+        setServerLocations(nextLocs);
+        persistSnapshotPatch({ locations: nextLocs });
       } catch (err) {
         handleFirestoreError(
           err,
@@ -3005,7 +3313,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
     },
-    [profile]
+    [profile, persistSnapshotPatch]
   );
 
   const adminAddPetak = useCallback(
@@ -3023,7 +3331,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       const petakKey = makeSafeKey(cleanPetak);
       const id = buildPetakDocId(companyKey, lokasiKey, petakKey);
       try {
-        await ensureLocationDoc(perusahaan, cleanLoc);
+        const ensuredLoc = await ensureLocationDoc(perusahaan, cleanLoc);
         await setDoc(doc(firestore, 'petaks_master', id), {
           perusahaan,
           companyKey,
@@ -3044,13 +3352,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           petakKey,
           createdByUid: profile.uid,
         };
-        setPetaks((prev) => [...prev.filter((p) => p.id !== id), created]);
-        await refreshData(true);
+        const nextPetaks = [
+          ...snapshotDataRef.current.petaks.filter((p) => p.id !== id),
+          created,
+        ];
+        setPetaks(nextPetaks);
+        let nextLocs = snapshotDataRef.current.locations;
+        if (ensuredLoc && !nextLocs.some((l) => l.id === ensuredLoc.id)) {
+          nextLocs = [...nextLocs, ensuredLoc];
+          setServerLocations(nextLocs);
+        }
+        persistSnapshotPatch({ petaks: nextPetaks, locations: nextLocs });
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, `petaks_master/${id}`);
       }
     },
-    [profile, ensureLocationDoc, refreshData]
+    [profile, ensureLocationDoc, persistSnapshotPatch]
   );
 
   const adminDeletePetak = useCallback(
@@ -3060,12 +3377,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
       try {
         await deleteDoc(doc(firestore, 'petaks_master', id));
-        setPetaks((prev) => prev.filter((p) => p.id !== id));
+        const nextPetaks = snapshotDataRef.current.petaks.filter(
+          (p) => p.id !== id
+        );
+        setPetaks(nextPetaks);
+        persistSnapshotPatch({ petaks: nextPetaks });
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `petaks_master/${id}`);
       }
     },
-    [profile]
+    [profile, persistSnapshotPatch]
   );
 
   const adminAddSpecies = useCallback(
@@ -3105,12 +3426,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           active: true,
           createdByUid: profile.uid,
         };
-        setSpecies((prev) => [...prev.filter((s) => s.id !== id), created]);
+        const nextSpecies = [
+          ...snapshotDataRef.current.species.filter((s) => s.id !== id),
+          created,
+        ];
+        setSpecies(nextSpecies);
+        persistSnapshotPatch({ species: nextSpecies });
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, `species_master/${id}`);
       }
     },
-    [profile]
+    [profile, persistSnapshotPatch]
   );
 
   const adminToggleSpecies = useCallback(
@@ -3122,14 +3448,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
       try {
         await updateDoc(doc(firestore, 'species_master', id), { active });
-        setSpecies((prev) =>
-          prev.map((s) => (s.id === id ? { ...s, active } : s))
+        const nextSpecies = snapshotDataRef.current.species.map((s) =>
+          s.id === id ? { ...s, active } : s
         );
+        setSpecies(nextSpecies);
+        persistSnapshotPatch({ species: nextSpecies });
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, `species_master/${id}`);
       }
     },
-    [profile]
+    [profile, persistSnapshotPatch]
   );
 
   const adminDeleteSpecies = useCallback(
@@ -3141,12 +3469,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
       try {
         await deleteDoc(doc(firestore, 'species_master', id));
-        setSpecies((prev) => prev.filter((s) => s.id !== id));
+        const nextSpecies = snapshotDataRef.current.species.filter(
+          (s) => s.id !== id
+        );
+        setSpecies(nextSpecies);
+        persistSnapshotPatch({ species: nextSpecies });
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `species_master/${id}`);
       }
     },
-    [profile]
+    [profile, persistSnapshotPatch]
   );
 
   // Google Spreadsheets
@@ -3420,7 +3752,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           uploadedByUid: profile.uid,
           createdAt: new Date().toISOString(),
         };
-        setBaseMaps((prev) => [layer, ...prev]);
+        const nextBaseMaps = [layer, ...snapshotDataRef.current.baseMaps];
+        setBaseMaps(nextBaseMaps);
+        persistSnapshotPatch({ baseMaps: nextBaseMaps });
         return layer;
       } catch (err) {
         handleFirestoreError(
@@ -3430,7 +3764,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
     },
-    [profile]
+    [profile, persistSnapshotPatch]
   );
 
   const adminUpdateBaseMapLabels = useCallback(
@@ -3457,17 +3791,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           labelEnabled: cleanEnabled,
           labelAttributes: cleanLabelAttrs,
         });
-        setBaseMaps((prev) =>
-          prev.map((b) =>
-            b.id === id
-              ? {
-                  ...b,
-                  labelEnabled: cleanEnabled,
-                  labelAttributes: cleanLabelAttrs,
-                }
-              : b
-          )
+        const nextBaseMaps = snapshotDataRef.current.baseMaps.map((b) =>
+          b.id === id
+            ? {
+                ...b,
+                labelEnabled: cleanEnabled,
+                labelAttributes: cleanLabelAttrs,
+              }
+            : b
         );
+        setBaseMaps(nextBaseMaps);
+        persistSnapshotPatch({ baseMaps: nextBaseMaps });
       } catch (err) {
         handleFirestoreError(
           err,
@@ -3476,7 +3810,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
     },
-    [profile]
+    [profile, persistSnapshotPatch]
   );
 
   const adminDeleteBaseMap = useCallback(
@@ -3494,7 +3828,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           await batch.commit();
         }
         await deleteDoc(doc(firestore, 'base_map_layers', id));
-        setBaseMaps((prev) => prev.filter((b) => b.id !== id));
+        const nextBaseMaps = snapshotDataRef.current.baseMaps.filter(
+          (b) => b.id !== id
+        );
+        setBaseMaps(nextBaseMaps);
+        persistSnapshotPatch({ baseMaps: nextBaseMaps });
       } catch (err) {
         handleFirestoreError(
           err,
@@ -3503,7 +3841,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
     },
-    [profile]
+    [profile, persistSnapshotPatch]
   );
 
   const fetchBaseMapDetail = useCallback(async (id: string) => {
@@ -3712,6 +4050,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
     fieldConditions,
     canopyCovers,
     locations,
+    masterLocations,
     petaks: scopedPetaks,
     species: scopedSpecies,
     companySpreadsheets,
@@ -3720,6 +4059,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
     gnssSettings,
     staffList,
     pendingCount,
+    otherCompanyPendingCount,
     conflictCount,
     getSpeciesForCompanyGroup,
     checkDuplicatePlantNumber,

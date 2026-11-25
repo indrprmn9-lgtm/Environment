@@ -26,6 +26,7 @@ import { useData } from '../contexts/DataContext';
 import {
   formatCoordinatePair,
   transformCrsToWgs84,
+  transformWgs84ToCrs,
 } from '../lib/crsTransform';
 import { extractGeoPdfBoundsFromBuffer } from '../lib/geoPdf';
 import {
@@ -424,8 +425,8 @@ export const MapViewerView: React.FC = () => {
     useState<BaseMapLayer | null>(null);
   const [layerLoading, setLayerLoading] = useState(false);
 
-  const [displayCrs, setDisplayCrs] = useState<CoordCrsCode>('EPSG:4326');
-  const [coordFormat, setCoordFormat] = useState<CoordFormatType>('DD');
+  const [displayCrs, setDisplayCrs] = useState<CoordCrsCode>('EPSG:32650');
+  const [coordFormat, setCoordFormat] = useState<CoordFormatType>('UTM');
 
   // Zoom & Pan state
   const [zoom, setZoom] = useState<number>(1);
@@ -459,7 +460,7 @@ export const MapViewerView: React.FC = () => {
   const [uploadCompany, setUploadCompany] = useState<CompanyName>('PT. NBSS');
   const [uploadName, setUploadName] = useState('');
   const [uploadType, setUploadType] = useState<BaseMapFileType>('shapefile');
-  const [uploadCrs, setUploadCrs] = useState<CoordCrsCode>('EPSG:32750');
+  const [uploadCrs, setUploadCrs] = useState<CoordCrsCode>('EPSG:32650');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [pdfBoundsMinLon, setPdfBoundsMinLon] = useState('');
   const [pdfBoundsMinLat, setPdfBoundsMinLat] = useState('');
@@ -501,17 +502,32 @@ export const MapViewerView: React.FC = () => {
     height: number;
   } | null>(null);
 
+  const userClearedLayerRef = useRef(false);
+  const [confirmDeleteLayerId, setConfirmDeleteLayerId] = useState<string | null>(
+    null
+  );
+  const [deletingLayerId, setDeletingLayerId] = useState<string | null>(null);
+
   const companyLayers = useMemo(() => {
     const ck = getCompanyKey(selectedCompany);
     return baseMaps.filter((b) => b.companyKey === ck);
   }, [baseMaps, selectedCompany]);
 
-  // Reset selected layer if company changes
+  // Auto-display Admin's Base Map on officer & admin views when switching company or loading layers
   useEffect(() => {
+    if (
+      selectedLayerId === 'NONE' &&
+      companyLayers.length > 0 &&
+      !userClearedLayerRef.current
+    ) {
+      setSelectedLayerId(companyLayers[0].id);
+      return;
+    }
     if (
       selectedLayerId !== 'NONE' &&
       !companyLayers.some((l) => l.id === selectedLayerId)
     ) {
+      userClearedLayerRef.current = false;
       setSelectedLayerId(companyLayers[0]?.id || 'NONE');
     }
   }, [companyLayers, selectedLayerId]);
@@ -927,13 +943,23 @@ export const MapViewerView: React.FC = () => {
         const buf = await file.arrayBuffer();
         const detected = extractGeoPdfBoundsFromBuffer(buf);
         if (detected) {
-          setUploadCrs('EPSG:4326');
-          setPdfBoundsMinLon(String(detected.minLon));
-          setPdfBoundsMinLat(String(detected.minLat));
-          setPdfBoundsMaxLon(String(detected.maxLon));
-          setPdfBoundsMaxLat(String(detected.maxLat));
+          const swUtm = transformWgs84ToCrs(
+            detected.minLon,
+            detected.minLat,
+            'EPSG:32650'
+          );
+          const neUtm = transformWgs84ToCrs(
+            detected.maxLon,
+            detected.maxLat,
+            'EPSG:32650'
+          );
+          setUploadCrs('EPSG:32650');
+          setPdfBoundsMinLon(swUtm.x.toFixed(2));
+          setPdfBoundsMinLat(swUtm.y.toFixed(2));
+          setPdfBoundsMaxLon(neUtm.x.toFixed(2));
+          setPdfBoundsMaxLat(neUtm.y.toFixed(2));
           setPdfGeoDetectedNotice(
-            `Koordinat sudut ArcGIS GeoPDF terdeteksi otomatis (${detected.sourceTag}).`
+            `Koordinat sudut ArcGIS GeoPDF terdeteksi (${detected.sourceTag}) dan dikonversi ke WGS 84 / UTM Zone 50N (meter).`
           );
         }
       } catch {
@@ -1093,6 +1119,7 @@ export const MapViewerView: React.FC = () => {
           bboxJson,
         });
         setSelectedCompany(uploadCompany);
+        userClearedLayerRef.current = false;
         setSelectedLayerId(created.id);
       } else if (uploadType === 'shapefile') {
         const buf = await uploadFile.arrayBuffer();
@@ -1127,6 +1154,7 @@ export const MapViewerView: React.FC = () => {
           availableAttributes: attrs,
         });
         setSelectedCompany(uploadCompany);
+        userClearedLayerRef.current = false;
         setSelectedLayerId(created.id);
       } else {
         const text = await uploadFile.text();
@@ -1153,6 +1181,7 @@ export const MapViewerView: React.FC = () => {
           availableAttributes: attrs,
         });
         setSelectedCompany(uploadCompany);
+        userClearedLayerRef.current = false;
         setSelectedLayerId(created.id);
       }
 
@@ -1471,6 +1500,8 @@ export const MapViewerView: React.FC = () => {
                   type="button"
                   onClick={() => {
                     if (lockedCompany && comp !== lockedCompany) return;
+                    userClearedLayerRef.current = false;
+                    setConfirmDeleteLayerId(null);
                     setSelectedCompany(comp);
                     setSelectedPoint(null);
                   }}
@@ -1523,7 +1554,12 @@ export const MapViewerView: React.FC = () => {
             <div className="flex gap-1.5">
               <select
                 value={selectedLayerId}
-                onChange={(e) => setSelectedLayerId(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  userClearedLayerRef.current = val === 'NONE';
+                  setConfirmDeleteLayerId(null);
+                  setSelectedLayerId(val);
+                }}
                 className="flex-1 min-w-0 min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs text-[#141A15]"
               >
                 <option value="NONE">
@@ -1539,12 +1575,9 @@ export const MapViewerView: React.FC = () => {
               {isAdmin && selectedLayerId !== 'NONE' && (
                 <button
                   type="button"
-                  onClick={async () => {
-                    await adminDeleteBaseMap(selectedLayerId);
-                    setSelectedLayerId('NONE');
-                    setMapNotice('Base map dihapus.');
-                  }}
-                  className="min-h-[44px] min-w-[44px] sm:min-h-[42px] sm:min-w-[42px] rounded-xl border border-stone-300 text-stone-500 hover:bg-red-50 hover:text-red-700 flex items-center justify-center shrink-0"
+                  disabled={deletingLayerId === selectedLayerId}
+                  onClick={() => setConfirmDeleteLayerId(selectedLayerId)}
+                  className="min-h-[44px] min-w-[44px] sm:min-h-[42px] sm:min-w-[42px] rounded-xl border border-stone-300 text-stone-500 hover:bg-red-50 hover:text-red-700 flex items-center justify-center shrink-0 disabled:opacity-50"
                   title="Hapus Base Map terpilih"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -1595,6 +1628,138 @@ export const MapViewerView: React.FC = () => {
             </select>
           </div>
         </div>
+
+        {/* Admin Base Map Management Strip */}
+        {isAdmin && (
+          <div className="pt-3 border-t border-stone-200/80 space-y-2.5 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-semibold text-stone-700 flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-[#14532D]" />
+                Kelola Base Map Tersimpan ({selectedCompany} ·{' '}
+                {companyLayers.length} layer)
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setUploadCompany(selectedCompany);
+                  setUploadError(null);
+                  setPdfGeoDetectedNotice(null);
+                  setUploadLabelEnabled(false);
+                  setUploadLabelAttributes([]);
+                  setUploadDetectedAttrs([]);
+                  setUploadFeatureCount(0);
+                  setShowUploadModal(true);
+                }}
+                className="min-h-[34px] px-3 rounded-lg bg-[#F2F7F3] border border-[#14532D]/30 text-[#14532D] font-semibold hover:bg-[#E8F3EB] flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Tambah Base Map
+              </button>
+            </div>
+
+            {companyLayers.length === 0 ? (
+              <p className="text-[11px] text-stone-500">
+                Belum ada base map yang diunggah untuk {selectedCompany}. Klik{' '}
+                <strong>Tambah Base Map</strong> untuk mengunggah file PDF/SHP
+                agar otomatis muncul di layar petugas.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {companyLayers.map((layer, idx) => {
+                  const isActive = selectedLayerId === layer.id;
+                  const isConfirming = confirmDeleteLayerId === layer.id;
+                  const isDeleting = deletingLayerId === layer.id;
+                  return (
+                    <div
+                      key={layer.id}
+                      className={`rounded-xl border px-3 py-2 flex flex-wrap items-center justify-between gap-2 ${
+                        isActive
+                          ? 'bg-[#F2F7F3] border-[#14532D]/40'
+                          : 'bg-[#F6F7F4] border-stone-200'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-[#141A15] truncate">
+                          {layer.name}
+                        </div>
+                        <div className="text-[11px] text-stone-500 truncate">
+                          {layer.fileType.toUpperCase()} · {layer.crsCode}
+                          {idx === 0 ? ' · Otomatis Tampil di Petugas' : ''}
+                        </div>
+                      </div>
+
+                      {isConfirming ? (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            disabled={isDeleting}
+                            onClick={async () => {
+                              setLocError(null);
+                              setDeletingLayerId(layer.id);
+                              try {
+                                await adminDeleteBaseMap(layer.id);
+                                setConfirmDeleteLayerId(null);
+                                userClearedLayerRef.current = false;
+                                if (selectedLayerId === layer.id) {
+                                  setSelectedLayerId('NONE');
+                                }
+                                setMapNotice(
+                                  `Base map "${layer.name}" berhasil dihapus.`
+                                );
+                              } catch (err) {
+                                setLocError(
+                                  err instanceof Error
+                                    ? err.message
+                                    : 'Gagal menghapus base map.'
+                                );
+                              } finally {
+                                setDeletingLayerId(null);
+                              }
+                            }}
+                            className="min-h-[32px] px-2.5 rounded-lg bg-red-600 text-white text-[11px] font-semibold hover:bg-red-700 disabled:opacity-50"
+                          >
+                            {isDeleting ? 'Menghapus...' : 'Ya, Hapus'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isDeleting}
+                            onClick={() => setConfirmDeleteLayerId(null)}
+                            className="min-h-[32px] px-2.5 rounded-lg border border-stone-300 bg-white text-[11px] font-medium text-stone-700 hover:bg-stone-50"
+                          >
+                            Batal
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {!isActive && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                userClearedLayerRef.current = false;
+                                setSelectedLayerId(layer.id);
+                              }}
+                              className="min-h-[32px] px-2.5 rounded-lg border border-stone-300 bg-white text-[11px] font-semibold text-[#14532D] hover:bg-stone-50"
+                            >
+                              Tampilkan
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteLayerId(layer.id)}
+                            className="min-h-[32px] px-2.5 rounded-lg border border-red-200 bg-white text-[11px] font-semibold text-red-700 hover:bg-red-50 flex items-center gap-1"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Hapus
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Active Base Map Vector Attribute Label Bar */}
         {loadedLayerDetail &&
@@ -2748,7 +2913,7 @@ export const MapViewerView: React.FC = () => {
                           uploadCrs === 'EPSG:4326'
                             ? 'mis. -1.40'
                             : uploadCrs.startsWith('EPSG:326')
-                            ? 'mis. 155200'
+                            ? 'mis. -154860 atau 155200'
                             : 'mis. 9845200'
                         }
                         className="w-full min-h-[42px] sm:min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-base sm:text-xs font-mono"
@@ -2768,7 +2933,7 @@ export const MapViewerView: React.FC = () => {
                           uploadCrs === 'EPSG:4326'
                             ? 'mis. -1.20'
                             : uploadCrs.startsWith('EPSG:326')
-                            ? 'mis. 177300'
+                            ? 'mis. -132700 atau 177300'
                             : 'mis. 9867300'
                         }
                         className="w-full min-h-[42px] sm:min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-base sm:text-xs font-mono"

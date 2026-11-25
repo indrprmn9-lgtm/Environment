@@ -42,6 +42,7 @@ export const StaffManagerView: React.FC = () => {
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [updatingStaffId, setUpdatingStaffId] = useState<string | null>(null);
 
   // Per-row inline range editing
   const [rangeDrafts, setRangeDrafts] = useState<
@@ -457,18 +458,40 @@ export const StaffManagerView: React.FC = () => {
                       <div className="flex flex-wrap items-center gap-2 shrink-0">
                         <select
                           value={currentCompany}
-                          onChange={(e) =>
-                            adminUpdateStaff(staff.id, {
-                              name: staff.name,
-                              role: staff.role,
-                              assignedCompany: e.target.value as AssignedCompany,
-                              rangeStart: staff.rangeStart ?? null,
-                              rangeEnd: staff.rangeEnd ?? null,
-                              active: staff.active,
-                            })
-                          }
+                          disabled={updatingStaffId === staff.id}
+                          onChange={async (e) => {
+                            const nextCompany = e.target.value as AssignedCompany;
+                            setError(null);
+                            setNotice(null);
+                            setUpdatingStaffId(staff.id);
+                            try {
+                              await adminUpdateStaff(staff.id, {
+                                name: staff.name,
+                                role: staff.role,
+                                assignedCompany: nextCompany,
+                                rangeStart: staff.rangeStart ?? null,
+                                rangeEnd: staff.rangeEnd ?? null,
+                                active: staff.active,
+                              });
+                              setNotice(
+                                `Penugasan ${staff.name} diperbarui ke ${
+                                  nextCompany === 'ALL'
+                                    ? 'Semua (3 PT)'
+                                    : nextCompany
+                                }.`
+                              );
+                            } catch (err) {
+                              setError(
+                                err instanceof Error
+                                  ? err.message
+                                  : 'Gagal memindahkan perusahaan petugas.'
+                              );
+                            } finally {
+                              setUpdatingStaffId(null);
+                            }
+                          }}
                           aria-label={`Perusahaan untuk ${staff.name}`}
-                          className="w-full sm:w-auto min-h-[42px] sm:min-h-[38px] rounded-lg border border-stone-200 bg-white px-2.5 text-base sm:text-xs font-medium text-stone-700"
+                          className="w-full sm:w-auto min-h-[42px] sm:min-h-[38px] rounded-lg border border-stone-200 bg-white px-2.5 text-base sm:text-xs font-medium text-stone-700 disabled:opacity-50"
                         >
                           {staff.role === 'admin' ? (
                             <option value="ALL">Semua (3 PT)</option>
@@ -486,23 +509,44 @@ export const StaffManagerView: React.FC = () => {
 
                         <button
                           type="button"
-                          onClick={() => {
+                          disabled={updatingStaffId === staff.id}
+                          onClick={async () => {
                             const nextRole: UserRole =
                               staff.role === 'admin' ? 'petugas' : 'admin';
                             const nextCompany: AssignedCompany =
                               nextRole === 'petugas' && currentCompany === 'ALL'
                                 ? 'PT. NBSS'
                                 : currentCompany;
-                            void adminUpdateStaff(staff.id, {
-                              name: staff.name,
-                              role: nextRole,
-                              assignedCompany: nextCompany,
-                              rangeStart: staff.rangeStart ?? null,
-                              rangeEnd: staff.rangeEnd ?? null,
-                              active: staff.active,
-                            });
+                            setError(null);
+                            setNotice(null);
+                            setUpdatingStaffId(staff.id);
+                            try {
+                              await adminUpdateStaff(staff.id, {
+                                name: staff.name,
+                                role: nextRole,
+                                assignedCompany: nextCompany,
+                                rangeStart: staff.rangeStart ?? null,
+                                rangeEnd: staff.rangeEnd ?? null,
+                                active: staff.active,
+                              });
+                              setNotice(
+                                `Peran ${staff.name} diubah menjadi ${
+                                  nextRole === 'admin'
+                                    ? 'Administrator'
+                                    : 'Petugas'
+                                }.`
+                              );
+                            } catch (err) {
+                              setError(
+                                err instanceof Error
+                                  ? err.message
+                                  : 'Gagal mengubah peran petugas.'
+                              );
+                            } finally {
+                              setUpdatingStaffId(null);
+                            }
                           }}
-                          className="min-h-[42px] sm:min-h-[38px] px-2.5 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 hover:bg-[#F6F7F4] flex items-center gap-1"
+                          className="min-h-[42px] sm:min-h-[38px] px-2.5 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 hover:bg-[#F6F7F4] flex items-center gap-1 disabled:opacity-50"
                         >
                           <Shield className="w-3.5 h-3.5" />
                           {staff.role === 'admin'
@@ -512,17 +556,37 @@ export const StaffManagerView: React.FC = () => {
 
                         <button
                           type="button"
-                          onClick={() =>
-                            adminUpdateStaff(staff.id, {
-                              name: staff.name,
-                              role: staff.role,
-                              assignedCompany: currentCompany,
-                              rangeStart: staff.rangeStart ?? null,
-                              rangeEnd: staff.rangeEnd ?? null,
-                              active: !staff.active,
-                            })
-                          }
-                          className="min-h-[42px] sm:min-h-[38px] px-2.5 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 hover:bg-[#F6F7F4] flex items-center gap-1"
+                          disabled={updatingStaffId === staff.id}
+                          onClick={async () => {
+                            const nextActive = !staff.active;
+                            setError(null);
+                            setNotice(null);
+                            setUpdatingStaffId(staff.id);
+                            try {
+                              await adminUpdateStaff(staff.id, {
+                                name: staff.name,
+                                role: staff.role,
+                                assignedCompany: currentCompany,
+                                rangeStart: staff.rangeStart ?? null,
+                                rangeEnd: staff.rangeEnd ?? null,
+                                active: nextActive,
+                              });
+                              setNotice(
+                                `Akun ${staff.name} ${
+                                  nextActive ? 'diaktifkan' : 'dinonaktifkan'
+                                }.`
+                              );
+                            } catch (err) {
+                              setError(
+                                err instanceof Error
+                                  ? err.message
+                                  : 'Gagal mengubah status aktif petugas.'
+                              );
+                            } finally {
+                              setUpdatingStaffId(null);
+                            }
+                          }}
+                          className="min-h-[42px] sm:min-h-[38px] px-2.5 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 hover:bg-[#F6F7F4] flex items-center gap-1 disabled:opacity-50"
                         >
                           {staff.active ? (
                             <>
@@ -539,8 +603,27 @@ export const StaffManagerView: React.FC = () => {
 
                         <button
                           type="button"
-                          onClick={() => adminDeleteStaff(staff.id)}
-                          className="min-h-[42px] min-w-[42px] sm:min-h-[38px] sm:min-w-[38px] flex items-center justify-center rounded-lg border border-stone-200 text-red-600 hover:bg-red-50"
+                          disabled={updatingStaffId === staff.id}
+                          onClick={async () => {
+                            setError(null);
+                            setNotice(null);
+                            setUpdatingStaffId(staff.id);
+                            try {
+                              await adminDeleteStaff(staff.id);
+                              setNotice(
+                                `Akun ${staff.name} (${staff.email}) dihapus dari daftar petugas.`
+                              );
+                            } catch (err) {
+                              setError(
+                                err instanceof Error
+                                  ? err.message
+                                  : 'Gagal menghapus petugas.'
+                              );
+                            } finally {
+                              setUpdatingStaffId(null);
+                            }
+                          }}
+                          className="min-h-[42px] min-w-[42px] sm:min-h-[38px] sm:min-w-[38px] flex items-center justify-center rounded-lg border border-stone-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
                           title="Hapus dari daftar"
                         >
                           <Trash2 className="w-4 h-4" />

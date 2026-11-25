@@ -125,15 +125,10 @@ export function formatCoordinatePair(
   if (formatType === 'UTM') {
     const utmCrs: CoordCrsCode = isUtmCrsCode(crsCode)
       ? crsCode
-      : suggestUtmZoneForLon(lon, lat);
+      : 'EPSG:32650';
     const { x, y } = transformWgs84ToCrs(lon, lat, utmCrs);
     const zoneLabel = formatUtmZoneBadge(utmCrs);
     return `Zona ${zoneLabel} · E ${x.toFixed(2)} m · N ${y.toFixed(2)} m`;
-  }
-
-  if (crsCode !== 'EPSG:4326') {
-    const { x, y } = transformWgs84ToCrs(lon, lat, crsCode);
-    return `X: ${x.toFixed(2)} m · Y: ${y.toFixed(2)} m (${crsCode})`;
   }
 
   return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;

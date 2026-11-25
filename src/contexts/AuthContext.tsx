@@ -1,4 +1,10 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
   GoogleAuthProvider,
   onAuthStateChanged,
@@ -13,6 +19,7 @@ import {
   getDoc,
   getDocs,
   limit,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -98,6 +105,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     inMemorySheetsAccessToken
   );
 
+  const profileRef = useRef<UserProfile | null>(null);
+  const updateProfileState = (next: UserProfile | null) => {
+    profileRef.current = next;
+    setProfile(next);
+  };
+
   const setMemorySheetsToken = (token: string | null) => {
     inMemorySheetsAccessToken = token;
     setSheetsAccessToken(token);
@@ -120,6 +133,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           assignedCompany: cached.assignedCompany || 'ALL',
         };
         setProfile(resolvedFallback);
+        profileRef.current = resolvedFallback;
         setAuthStatus('authorized');
         return resolvedFallback;
       }
@@ -135,7 +149,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           active: true,
           staffId: 'bootstrap_admin',
         };
-        setProfile(fallbackAdmin);
+        updateProfileState(fallbackAdmin);
         setAuthStatus('authorized');
         return fallbackAdmin;
       }
@@ -143,7 +157,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     if (!user.emailVerified || !emailLower) {
       saveCachedUserProfile(null);
-      setProfile(null);
+      updateProfileState(null);
       setAuthError('Email akun Google belum terverifikasi.');
       setAuthStatus('unauthorized');
       return null;
@@ -297,7 +311,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           staffId: 'bootstrap_admin',
         };
         saveCachedUserProfile(resolved);
-        setProfile(resolved);
+        updateProfileState(resolved);
         setAuthStatus('authorized');
         return resolved;
       }
@@ -322,14 +336,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
       if (!staffData || !staffDocId) {
         saveCachedUserProfile(null);
-        setProfile(null);
+        updateProfileState(null);
         setAuthStatus('unauthorized');
         return null;
       }
 
       if (staffData.active !== true) {
         saveCachedUserProfile(null);
-        setProfile(null);
+        updateProfileState(null);
         setAuthStatus('inactive');
         return null;
       }
@@ -438,7 +452,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         staffId: staffDocId,
       };
       saveCachedUserProfile(resolved);
-      setProfile(resolved);
+      updateProfileState(resolved);
       setAuthStatus('authorized');
       return resolved;
     } catch (err) {
@@ -449,7 +463,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             ...cached,
             assignedCompany: cached.assignedCompany || 'ALL',
           };
-          setProfile(resolvedFallback);
+          updateProfileState(resolvedFallback);
           setAuthStatus('authorized');
           return resolvedFallback;
         }
@@ -468,11 +482,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           'Akses akun belum diizinkan oleh aturan keamanan database. Silakan hubungi Administrator.';
       }
       setAuthError(displayError);
-      setProfile(null);
+      updateProfileState(null);
       setAuthStatus('unauthorized');
       return null;
     }
   };
+
+  const resolveUserAccessRef = useRef(resolveUserAccess);
+  resolveUserAccessRef.current = resolveUserAccess;
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -480,26 +497,117 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setAuthError(null);
       if (!user) {
         setMemorySheetsToken(null);
-        setProfile(null);
+        updateProfileState(null);
         setAuthStatus('signed_out');
         return;
       }
       setAuthStatus('loading');
-      await resolveUserAccess(user);
+      await resolveUserAccessRef.current(user);
     });
     return () => unsubscribe();
   }, []);
 
-  // Automatically re-sync Firestore user profile whenever connection returns
+  // Real-time listener on staff_whitelist so PT reassignment, role changes, or activation take effect immediately without logout/login
+  useEffect(() => {
+    if (!firebaseUser || !firebaseUser.emailVerified || !firebaseUser.email) {
+      return;
+    }
+    const emailLower = firebaseUser.email.trim().toLowerCase();
+    const isBootstrap = emailLower === BOOTSTRAP_ADMIN_EMAIL;
+
+    const handleStaffDocChange = (
+      docId: string | null,
+      data: Record<string, unknown> | undefined
+    ) => {
+      if (!docId || !data || data.active !== true) {
+        if (profileRef.current !== null) {
+          void resolveUserAccessRef.current(firebaseUser, { silent: true });
+        }
+        return;
+      }
+      const nextRole: UserRole =
+        data.role === 'admin' || isBootstrap ? 'admin' : 'petugas';
+      const nextName = String(
+        data.name || firebaseUser.displayName || (isBootstrap ? 'Administrator' : emailLower)
+      ).slice(0, 100);
+      const nextCompany: AssignedCompany =
+        (data.assignedCompany as AssignedCompany) || 'ALL';
+      const nextRangeStart =
+        typeof data.rangeStart === 'number' ? data.rangeStart : null;
+      const nextRangeEnd =
+        typeof data.rangeEnd === 'number' ? data.rangeEnd : null;
+
+      const curr = profileRef.current;
+      if (
+        !curr ||
+        !curr.active ||
+        curr.staffId !== docId ||
+        curr.role !== nextRole ||
+        curr.assignedCompany !== nextCompany ||
+        curr.name !== nextName ||
+        (curr.rangeStart ?? null) !== nextRangeStart ||
+        (curr.rangeEnd ?? null) !== nextRangeEnd
+      ) {
+        void resolveUserAccessRef.current(firebaseUser, { silent: true });
+      }
+    };
+
+    if (isBootstrap) {
+      const unsub = onSnapshot(
+        doc(firestore, 'staff_whitelist', 'bootstrap_admin'),
+        (snap) => {
+          handleStaffDocChange(
+            snap.exists() ? snap.id : null,
+            snap.exists() ? snap.data() : undefined
+          );
+        },
+        (err) => {
+          console.warn('staff_whitelist listener warning:', err);
+        }
+      );
+      return () => unsub();
+    }
+
+    const wlQuery = query(
+      collection(firestore, 'staff_whitelist'),
+      where('email', '==', emailLower),
+      limit(1)
+    );
+    const unsub = onSnapshot(
+      wlQuery,
+      (qSnap) => {
+        const first = qSnap.docs[0];
+        handleStaffDocChange(
+          first ? first.id : null,
+          first ? first.data() : undefined
+        );
+      },
+      (err) => {
+        console.warn('staff_whitelist listener warning:', err);
+      }
+    );
+    return () => unsub();
+  }, [firebaseUser]);
+
+  // Automatically re-sync Firestore user profile whenever connection returns or app returns to foreground
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleOnline = () => {
       if (auth.currentUser) {
-        void resolveUserAccess(auth.currentUser, { silent: true });
+        void resolveUserAccessRef.current(auth.currentUser, { silent: true });
+      }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && auth.currentUser) {
+        void resolveUserAccessRef.current(auth.currentUser, { silent: true });
       }
     };
     window.addEventListener('online', handleOnline);
-    return () => window.removeEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, []);
 
   const signInWithGoogle = async () => {
