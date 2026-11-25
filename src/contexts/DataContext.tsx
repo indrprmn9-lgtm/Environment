@@ -23,7 +23,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { checkServerReachable } from '../lib/apiClient';
-import { firestore } from '../lib/firebase';
+import { auth, firestore } from '../lib/firebase';
 import {
   formatFirestoreErrorForUser,
   handleFirestoreError,
@@ -387,6 +387,42 @@ function sliceString(text: string, size: number): string[] {
     parts.push(text.slice(i, i + size));
   }
   return parts;
+}
+
+function sanitizeOptNum(
+  val: number | null | undefined,
+  min: number,
+  max: number
+): number | null {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return null;
+  if (val < min || val > max) return null;
+  return val;
+}
+
+function sanitizeWaktuInput(val: string | null | undefined): string | null {
+  if (!val || typeof val !== 'string') return null;
+  const trimmed = val.trim();
+  if (/^[0-9]{2}:[0-9]{2}(:[0-9]{2})?$/.test(trimmed)) {
+    return trimmed;
+  }
+  return null;
+}
+
+function sanitizePhotoUrl(val: string | null | undefined): string | null {
+  if (!val || typeof val !== 'string') return null;
+  return val.length <= 350000 ? val : null;
+}
+
+function clampFiniteMetric(
+  val: number,
+  min: number,
+  max: number,
+  fallback: number
+): number {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return fallback;
+  if (val < min) return min;
+  if (val > max) return max;
+  return Math.round(val * 100) / 100;
 }
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
@@ -845,6 +881,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
               });
             } catch (lightErr) {
               console.warn('Master/BaseMap refresh warning:', lightErr);
+              if (isFirestorePermissionError(lightErr)) {
+                await syncProfileSilently();
+                setLastSyncError(
+                  formatFirestoreErrorForUser(
+                    lightErr,
+                    'Izin baca database ditolak. Silakan muat ulang atau Keluar lalu Masuk ulang dengan Google.'
+                  )
+                );
+              }
             } finally {
               setIsLoading(false);
             }
@@ -1693,7 +1738,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             fc.bangunanKonservasi === 'Ada'
               ? Math.max(1, Math.round(fc.jumlahBangunan))
               : 0;
-          const cleanPetugas = normalizeDisplayText(fc.namaPetugas);
+          const cleanPetugas = (
+            normalizeDisplayText(fc.namaPetugas || profile.name || 'Petugas') ||
+            'Petugas'
+          ).slice(0, 100);
+          const actorUid = auth.currentUser?.uid || profile.uid;
+          const safeLat = sanitizeOptNum(fc.latitude, -90, 90);
+          const safeLon = sanitizeOptNum(fc.longitude, -180, 180);
+          const safeHAcc = sanitizeOptNum(fc.horizontalAccuracyM, 0, 100000);
+          const safeVAcc = sanitizeOptNum(fc.verticalAccuracyM, 0, 100000);
+          const safePhoto = sanitizePhotoUrl(fc.photoDataUrl);
           if (!existing.exists()) {
             await setDoc(fcRef, {
               perusahaan,
@@ -1706,13 +1760,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
               bangunanKonservasi: fc.bangunanKonservasi,
               jumlahBangunan,
               namaPetugas: cleanPetugas,
-              latitude: fc.latitude ?? null,
-              longitude: fc.longitude ?? null,
-              horizontalAccuracyM: fc.horizontalAccuracyM ?? null,
-              verticalAccuracyM: fc.verticalAccuracyM ?? null,
-              photoDataUrl: fc.photoDataUrl ?? null,
-              createdByUid: profile.uid,
-              updatedByUid: profile.uid,
+              latitude: safeLat,
+              longitude: safeLon,
+              horizontalAccuracyM: safeHAcc,
+              verticalAccuracyM: safeVAcc,
+              photoDataUrl: safePhoto,
+              createdByUid: actorUid,
+              updatedByUid: actorUid,
               createdAt: serverTimestamp(),
               updatedAt: serverTimestamp(),
             });
@@ -1723,12 +1777,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
               bangunanKonservasi: fc.bangunanKonservasi,
               jumlahBangunan,
               namaPetugas: cleanPetugas,
-              latitude: fc.latitude ?? null,
-              longitude: fc.longitude ?? null,
-              horizontalAccuracyM: fc.horizontalAccuracyM ?? null,
-              verticalAccuracyM: fc.verticalAccuracyM ?? null,
-              photoDataUrl: fc.photoDataUrl ?? null,
-              updatedByUid: profile.uid,
+              latitude: safeLat,
+              longitude: safeLon,
+              horizontalAccuracyM: safeHAcc,
+              verticalAccuracyM: safeVAcc,
+              photoDataUrl: safePhoto,
+              updatedByUid: actorUid,
               updatedAt: serverTimestamp(),
             });
           }
@@ -1741,7 +1795,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             lokasiKey,
             jumlahBangunan,
             namaPetugas: cleanPetugas,
-            updatedByUid: profile.uid,
+            latitude: safeLat,
+            longitude: safeLon,
+            horizontalAccuracyM: safeHAcc,
+            verticalAccuracyM: safeVAcc,
+            photoDataUrl: safePhoto,
+            updatedByUid: actorUid,
             updatedAt: new Date().toISOString(),
             syncStatus: 'synced',
           });
@@ -1868,47 +1927,83 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             continue;
           }
 
-          const cleanPetugas = normalizeDisplayText(rec.namaPetugas);
-          const tinggiCm = rec.kondisiTanaman === 'Mati' ? 0 : rec.tinggiCm;
-          const diameterMm = rec.kondisiTanaman === 'Mati' ? 0 : rec.diameterMm;
+          const cleanPetugas = (
+            normalizeDisplayText(rec.namaPetugas || profile.name || 'Petugas') ||
+            'Petugas'
+          ).slice(0, 100);
+          const cleanJenis = (
+            normalizeDisplayText(rec.jenisTanaman) || 'Lainnya'
+          ).slice(0, 100);
+          const safeNomor = Math.max(
+            1,
+            Math.min(9999999, Math.round(Number(rec.nomorTanaman) || 1))
+          );
+          const tinggiCm =
+            rec.kondisiTanaman === 'Mati'
+              ? 0
+              : clampFiniteMetric(rec.tinggiCm, 0.1, 15000, 1);
+          const diameterMm =
+            rec.kondisiTanaman === 'Mati'
+              ? 0
+              : clampFiniteMetric(rec.diameterMm, 0.1, 5000, 1);
           const keterangan = (rec.keterangan || '').trim().slice(0, 500);
           const gnssOverrideReason = rec.gnssOverrideReason
             ? rec.gnssOverrideReason.trim().slice(0, 250)
             : null;
+          const actorUid = auth.currentUser?.uid || profile.uid;
+          const actorEmail =
+            (auth.currentUser?.email || profile.email || '')
+              .trim()
+              .toLowerCase()
+              .slice(0, 150) || 'petugas@silvitrack.local';
+          const safeLat = sanitizeOptNum(rec.latitude, -90, 90);
+          const safeLon = sanitizeOptNum(rec.longitude, -180, 180);
+          const safeAlt = sanitizeOptNum(rec.altitudeM, -500, 10000);
+          const safeHAcc = sanitizeOptNum(rec.horizontalAccuracyM, 0, 100000);
+          const safeVAcc = sanitizeOptNum(rec.verticalAccuracyM, 0, 100000);
+          const safeGnssSource = rec.gnssSource
+            ? String(rec.gnssSource).trim().slice(0, 120)
+            : null;
+          const safeCoordCrs = (rec.coordCrs ?? 'EPSG:4326')
+            .toString()
+            .trim()
+            .slice(0, 40);
+          const safePhoto = sanitizePhotoUrl(rec.photoDataUrl);
+          const safeWaktu = sanitizeWaktuInput(rec.waktuInput);
 
           await setDoc(recRef, {
             perusahaan,
             companyKey,
             menuType: rec.menuType,
             tanggalInput: rec.tanggalInput,
-            waktuInput: rec.waktuInput || null,
+            waktuInput: safeWaktu,
             periode,
             lokasi: cleanLoc,
             lokasiKey,
             namaPetugas: cleanPetugas,
             nomorPetak: cleanPetak,
             petakKey,
-            nomorTanaman: rec.nomorTanaman,
+            nomorTanaman: safeNomor,
             kelompokTanaman: rec.kelompokTanaman,
-            jenisTanaman: rec.jenisTanaman,
+            jenisTanaman: cleanJenis,
             tinggiCm,
             diameterMm,
             kondisiTanaman: rec.kondisiTanaman,
             keterangan,
             extremeConfirmed: Boolean(rec.extremeConfirmed),
-            latitude: rec.latitude ?? null,
-            longitude: rec.longitude ?? null,
-            altitudeM: rec.altitudeM ?? null,
-            horizontalAccuracyM: rec.horizontalAccuracyM ?? null,
-            verticalAccuracyM: rec.verticalAccuracyM ?? null,
-            gnssSource: rec.gnssSource ?? null,
+            latitude: safeLat,
+            longitude: safeLon,
+            altitudeM: safeAlt,
+            horizontalAccuracyM: safeHAcc,
+            verticalAccuracyM: safeVAcc,
+            gnssSource: safeGnssSource,
             gnssOverrideReason,
-            coordCrs: rec.coordCrs ?? 'EPSG:4326',
-            photoDataUrl: rec.photoDataUrl ?? null,
+            coordCrs: safeCoordCrs,
+            photoDataUrl: safePhoto,
             sheetSyncedAt: null,
-            createdByUid: profile.uid,
-            createdByEmail: profile.email,
-            updatedByUid: profile.uid,
+            createdByUid: actorUid,
+            createdByEmail: actorEmail,
+            updatedByUid: actorUid,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
@@ -1923,15 +2018,25 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             namaPetugas: cleanPetugas,
             nomorPetak: cleanPetak,
             petakKey,
+            nomorTanaman: safeNomor,
+            jenisTanaman: cleanJenis,
             tinggiCm,
             diameterMm,
             keterangan,
+            latitude: safeLat,
+            longitude: safeLon,
+            altitudeM: safeAlt,
+            horizontalAccuracyM: safeHAcc,
+            verticalAccuracyM: safeVAcc,
+            gnssSource: safeGnssSource,
             gnssOverrideReason,
-            coordCrs: rec.coordCrs ?? 'EPSG:4326',
+            coordCrs: safeCoordCrs,
+            photoDataUrl: safePhoto,
+            waktuInput: safeWaktu ?? undefined,
             sheetSyncedAt: null,
-            createdByUid: profile.uid,
-            createdByEmail: profile.email,
-            updatedByUid: profile.uid,
+            createdByUid: actorUid,
+            createdByEmail: actorEmail,
+            updatedByUid: actorUid,
             updatedAt: new Date().toISOString(),
             syncStatus: 'synced',
           });
@@ -2263,7 +2368,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           `Akses dibatasi: akun Anda hanya ditugaskan untuk ${profile.assignedCompany}.`
         );
       }
-      const cleanLoc = normalizeDisplayText(input.lokasi);
+      const cleanLoc = normalizeDisplayText(input.lokasi).slice(0, 100);
       const companyKey = getCompanyKey(input.perusahaan);
       const lokasiKey = makeSafeKey(cleanLoc);
       const id = buildFieldConditionId(
@@ -2274,8 +2379,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       );
       const jumlahBangunan =
         input.bangunanKonservasi === 'Ada'
-          ? Math.max(1, Math.round(input.jumlahBangunan))
+          ? Math.max(1, Math.min(10000, Math.round(input.jumlahBangunan)))
           : 0;
+      const actorUid = auth.currentUser?.uid || profile.uid;
+      const cleanPetugas = (
+        normalizeDisplayText(input.namaPetugas || profile.name || 'Petugas') ||
+        'Petugas'
+      ).slice(0, 100);
 
       const fcRecord: FieldCondition = {
         id,
@@ -2288,14 +2398,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         coverCrop: input.coverCrop,
         bangunanKonservasi: input.bangunanKonservasi,
         jumlahBangunan,
-        namaPetugas: normalizeDisplayText(input.namaPetugas),
-        latitude: input.latitude ?? null,
-        longitude: input.longitude ?? null,
-        horizontalAccuracyM: input.horizontalAccuracyM ?? null,
-        verticalAccuracyM: input.verticalAccuracyM ?? null,
-        photoDataUrl: input.photoDataUrl ?? null,
-        createdByUid: profile.uid,
-        updatedByUid: profile.uid,
+        namaPetugas: cleanPetugas,
+        latitude: sanitizeOptNum(input.latitude, -90, 90),
+        longitude: sanitizeOptNum(input.longitude, -180, 180),
+        horizontalAccuracyM: sanitizeOptNum(input.horizontalAccuracyM, 0, 100000),
+        verticalAccuracyM: sanitizeOptNum(input.verticalAccuracyM, 0, 100000),
+        photoDataUrl: sanitizePhotoUrl(input.photoDataUrl),
+        createdByUid: actorUid,
+        updatedByUid: actorUid,
         syncStatus: 'pending',
       };
 
@@ -2337,8 +2447,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             horizontalAccuracyM: fcRecord.horizontalAccuracyM,
             verticalAccuracyM: fcRecord.verticalAccuracyM,
             photoDataUrl: fcRecord.photoDataUrl,
-            createdByUid: profile.uid,
-            updatedByUid: profile.uid,
+            createdByUid: actorUid,
+            updatedByUid: actorUid,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
@@ -2354,7 +2464,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             horizontalAccuracyM: fcRecord.horizontalAccuracyM,
             verticalAccuracyM: fcRecord.verticalAccuracyM,
             photoDataUrl: fcRecord.photoDataUrl,
-            updatedByUid: profile.uid,
+            updatedByUid: actorUid,
             updatedAt: serverTimestamp(),
           });
         }
@@ -2554,8 +2664,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         input.menuType === 'SENSUS'
           ? ''
           : normalizeDisplayText(input.nomorPetak).slice(0, 50);
-      const cleanPetugas = normalizeDisplayText(input.namaPetugas).slice(0, 100);
-      const cleanJenis = normalizeDisplayText(input.jenisTanaman).slice(0, 100);
+      const cleanPetugas = (
+        normalizeDisplayText(input.namaPetugas || profile.name || 'Petugas') ||
+        'Petugas'
+      ).slice(0, 100);
+      const cleanJenis = (
+        normalizeDisplayText(input.jenisTanaman) || 'Lainnya'
+      ).slice(0, 100);
       const cleanGnssSource = input.gnssSource
         ? input.gnssSource.trim().slice(0, 120)
         : null;
@@ -2565,6 +2680,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       const lokasiKey = makeSafeKey(cleanLoc);
       const petakKey =
         input.menuType === 'SENSUS' ? 'SENSUS' : makeSafeKey(cleanPetak);
+      const safeNomor = Math.max(
+        1,
+        Math.min(9999999, Math.round(Number(input.nomorTanaman) || 1))
+      );
 
       const dup = checkDuplicatePlantNumber(
         input.perusahaan,
@@ -2572,7 +2691,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         cleanLoc,
         cleanPetak,
         periode,
-        input.nomorTanaman
+        safeNomor
       );
       if (dup.isDuplicate) {
         throw new Error(dup.reason || 'Nomor tanaman sudah terdaftar.');
@@ -2584,12 +2703,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         lokasiKey,
         petakKey,
         periode,
-        input.nomorTanaman
+        safeNomor
       );
 
-      const tinggiVal = input.kondisiTanaman === 'Mati' ? 0 : input.tinggiCm;
+      const tinggiVal =
+        input.kondisiTanaman === 'Mati'
+          ? 0
+          : clampFiniteMetric(input.tinggiCm, 0.1, 15000, 1);
       const diameterVal =
-        input.kondisiTanaman === 'Mati' ? 0 : input.diameterMm;
+        input.kondisiTanaman === 'Mati'
+          ? 0
+          : clampFiniteMetric(input.diameterMm, 0.1, 5000, 1);
+      const actorUid = auth.currentUser?.uid || profile.uid;
+      const actorEmail =
+        (auth.currentUser?.email || profile.email || '')
+          .trim()
+          .toLowerCase()
+          .slice(0, 150) || 'petugas@silvitrack.local';
+      const safeWaktu = sanitizeWaktuInput(input.waktuInput);
 
       const record: PlantRecord = {
         id,
@@ -2597,14 +2728,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         companyKey,
         menuType: input.menuType,
         tanggalInput: input.tanggalInput,
-        waktuInput: input.waktuInput,
+        waktuInput: safeWaktu ?? undefined,
         periode,
         lokasi: cleanLoc,
         lokasiKey,
         namaPetugas: cleanPetugas,
         nomorPetak: cleanPetak,
         petakKey,
-        nomorTanaman: input.nomorTanaman,
+        nomorTanaman: safeNomor,
         kelompokTanaman: input.kelompokTanaman,
         jenisTanaman: cleanJenis,
         tinggiCm: tinggiVal,
@@ -2612,20 +2743,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         kondisiTanaman: input.kondisiTanaman,
         keterangan: input.keterangan.trim().slice(0, 500),
         extremeConfirmed: input.extremeConfirmed,
-        latitude: input.latitude ?? null,
-        longitude: input.longitude ?? null,
-        altitudeM: input.altitudeM ?? null,
-        horizontalAccuracyM: input.horizontalAccuracyM ?? null,
-        verticalAccuracyM: input.verticalAccuracyM ?? null,
+        latitude: sanitizeOptNum(input.latitude, -90, 90),
+        longitude: sanitizeOptNum(input.longitude, -180, 180),
+        altitudeM: sanitizeOptNum(input.altitudeM, -500, 10000),
+        horizontalAccuracyM: sanitizeOptNum(input.horizontalAccuracyM, 0, 100000),
+        verticalAccuracyM: sanitizeOptNum(input.verticalAccuracyM, 0, 100000),
         gnssSource: cleanGnssSource,
         gnssOverrideReason: input.gnssOverrideReason
           ? input.gnssOverrideReason.trim().slice(0, 250)
           : null,
         coordCrs: cleanCoordCrs,
-        photoDataUrl: input.photoDataUrl ?? null,
-        createdByUid: profile.uid,
-        createdByEmail: profile.email,
-        updatedByUid: profile.uid,
+        photoDataUrl: sanitizePhotoUrl(input.photoDataUrl),
+        createdByUid: actorUid,
+        createdByEmail: actorEmail,
+        updatedByUid: actorUid,
         syncStatus: 'pending',
       };
 
@@ -2669,7 +2800,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             companyKey: record.companyKey,
             menuType: record.menuType,
             tanggalInput: record.tanggalInput,
-            waktuInput: record.waktuInput || null,
+            waktuInput: safeWaktu,
             periode: record.periode,
             lokasi: record.lokasi,
             lokasiKey: record.lokasiKey,
@@ -2694,9 +2825,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             coordCrs: record.coordCrs,
             photoDataUrl: record.photoDataUrl,
             sheetSyncedAt: null,
-            createdByUid: profile.uid,
-            createdByEmail: profile.email,
-            updatedByUid: profile.uid,
+            createdByUid: actorUid,
+            createdByEmail: actorEmail,
+            updatedByUid: actorUid,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });

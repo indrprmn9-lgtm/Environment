@@ -470,6 +470,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       if (silent) {
+        console.warn('Silent profile sync warning:', err);
         return null;
       }
 
