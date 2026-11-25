@@ -630,6 +630,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
   const ensureLocationDoc = useCallback(
     async (perusahaan: CompanyName, cleanLoc: string) => {
       if (!profile) return null;
+      const actorUid = auth.currentUser?.uid || profile.uid;
       const safeLoc = cleanLoc.slice(0, 100);
       const companyKey = getCompanyKey(perusahaan);
       const lokasiKey = makeSafeKey(safeLoc);
@@ -648,7 +649,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             companyKey,
             name: safeLoc,
             lokasiKey,
-            createdByUid: profile.uid,
+            createdByUid: actorUid,
             createdAt: serverTimestamp(),
           });
         } catch (err) {
@@ -2486,6 +2487,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           return { savedOffline: true };
         }
         if (isFirestorePermissionError(err)) {
+          await auth.currentUser?.getIdToken(true).catch(() => null);
           const syncedProfile = await syncProfileSilently();
           if (syncedProfile && syncedProfile.active) {
             try {
@@ -2525,8 +2527,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           `Akses dibatasi: akun Anda hanya ditugaskan untuk ${profile.assignedCompany}.`
         );
       }
-      const cleanLoc = normalizeDisplayText(input.lokasi);
-      const cleanPetak = normalizeDisplayText(input.nomorPetak);
+      const cleanLoc = normalizeDisplayText(input.lokasi).slice(0, 100);
+      const cleanPetak = normalizeDisplayText(input.nomorPetak).slice(0, 50);
       const companyKey = getCompanyKey(input.perusahaan);
       const lokasiKey = makeSafeKey(cleanLoc);
       const petakKey = makeSafeKey(cleanPetak);
@@ -2536,6 +2538,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         petakKey,
         input.periode
       );
+      const actorUid = auth.currentUser?.uid || profile.uid;
+      const cleanPetugas = (
+        normalizeDisplayText(input.namaPetugas || profile.name || 'Petugas') ||
+        'Petugas'
+      ).slice(0, 100);
 
       const canopyRec: CanopyCover = {
         id,
@@ -2548,9 +2555,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         petakKey,
         periode: input.periode,
         penutupanTajuk: input.penutupanTajuk,
-        namaPetugas: normalizeDisplayText(input.namaPetugas),
-        createdByUid: profile.uid,
-        updatedByUid: profile.uid,
+        namaPetugas: cleanPetugas,
+        createdByUid: actorUid,
+        updatedByUid: actorUid,
         syncStatus: 'pending',
       };
 
@@ -2586,8 +2593,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             periode: input.periode,
             penutupanTajuk: input.penutupanTajuk,
             namaPetugas: canopyRec.namaPetugas,
-            createdByUid: profile.uid,
-            updatedByUid: profile.uid,
+            createdByUid: actorUid,
+            updatedByUid: actorUid,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
@@ -2597,7 +2604,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             nomorPetak: cleanPetak,
             penutupanTajuk: input.penutupanTajuk,
             namaPetugas: canopyRec.namaPetugas,
-            updatedByUid: profile.uid,
+            updatedByUid: actorUid,
             updatedAt: serverTimestamp(),
           });
         }
@@ -2618,6 +2625,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           return { savedOffline: true };
         }
         if (isFirestorePermissionError(err)) {
+          await auth.currentUser?.getIdToken(true).catch(() => null);
           const syncedProfile = await syncProfileSilently();
           if (syncedProfile && syncedProfile.active) {
             try {
@@ -2871,8 +2879,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           queueOffline();
           return { savedOffline: true, record };
         }
-        // Self-heal if users/{uid} was out-of-sync or created while offline, then retry once
+        // Self-heal if auth token or users/{uid} was out-of-sync, then retry once
         if (isFirestorePermissionError(err)) {
+          await auth.currentUser?.getIdToken(true).catch(() => null);
           const syncedProfile = await syncProfileSilently();
           if (syncedProfile && syncedProfile.active) {
             try {

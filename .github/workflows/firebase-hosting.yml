@@ -43,5 +43,9 @@ jobs:
           export GOOGLE_APPLICATION_CREDENTIALS="$SA_PATH"
           npx --yes firebase-tools deploy --only hosting --project gen-lang-client-0280945316 --non-interactive
           STATUS=$?
+          if [ $STATUS -eq 0 ]; then
+            echo "Menyinkronkan Firestore Security Rules ke database ai-studio-7b2a8c16-10a9-4175-b9c0-10d04b4376bf..."
+            npx --yes firebase-tools deploy --only firestore:rules --project gen-lang-client-0280945316 --non-interactive || echo "::warning::Hosting berhasil diunggah, namun deploy otomatis firestore:rules dilewati karena izin Service Account. Jika perlu, salin isi firestore.rules ke Firebase Console > Firestore Database (ai-studio-7b2a8c16-10a9-4175-b9c0-10d04b4376bf) > Rules > Publish."
+          fi
           rm -f "$SA_PATH"
           exit $STATUS

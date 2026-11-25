@@ -28,8 +28,8 @@ if ! npx --yes firebase-tools login:list 2>/dev/null | grep -q "@"; then
   npx --yes firebase-tools login
 fi
 
-echo "[4/4] Mengunggah ke Firebase Hosting Gratis..."
-npx --yes firebase-tools deploy --only hosting --project gen-lang-client-0280945316
+echo "[4/4] Mengunggah aplikasi & aturan Firestore ke Firebase Gratis..."
+npx --yes firebase-tools deploy --only hosting,firestore:rules --project gen-lang-client-0280945316
 
 echo ""
 echo "========================================================"

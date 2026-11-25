@@ -56,8 +56,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo [4/4] Mengunggah aplikasi ke Firebase Hosting Gratis...
-call npx --yes firebase-tools deploy --only hosting --project gen-lang-client-0280945316
+echo [4/4] Mengunggah aplikasi ^& aturan Firestore ke Firebase Gratis...
+call npx --yes firebase-tools deploy --only hosting,firestore:rules --project gen-lang-client-0280945316
 if errorlevel 1 (
   echo.
   echo [X] Deploy gagal. Jika akun yang login berbeda, jalankan:
