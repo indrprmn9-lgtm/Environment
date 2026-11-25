@@ -21,7 +21,7 @@ if errorlevel 1 (
 
 if not exist "node_modules" (
   echo [1/4] Mengunduh paket aplikasi pertama kali...
-  call npm install
+  call npm install --legacy-peer-deps --no-audit --no-fund
   if errorlevel 1 (
     echo [X] Gagal menjalankan npm install. Pastikan koneksi internet aktif.
     pause

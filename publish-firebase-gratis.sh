@@ -15,7 +15,7 @@ fi
 
 if [ ! -d "node_modules" ]; then
   echo "[1/4] Menginstal dependensi..."
-  npm install
+  npm install --legacy-peer-deps --no-audit --no-fund
 else
   echo "[1/4] Dependensi sudah siap."
 fi

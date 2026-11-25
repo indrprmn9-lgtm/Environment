@@ -20,15 +20,28 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm install --legacy-peer-deps --no-audit --no-fund
 
       - name: Build production bundle
         run: npm run build
 
-      - name: Deploy to Firebase Hosting Live Channel
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0280945316 }}
-          channelId: live
-          projectId: gen-lang-client-0280945316
+      - name: Prepare Firebase credentials & deploy to Firebase Hosting
+        env:
+          FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0280945316 }}
+        run: |
+          if [ -z "$FIREBASE_SA_JSON" ]; then
+            echo "::error::Secret FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0280945316 belum diisi di GitHub Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          SA_PATH="$RUNNER_TEMP/firebase-sa.json"
+          printf '%s' "$FIREBASE_SA_JSON" > "$SA_PATH"
+          if ! node -e "const fs=require('fs'); const j=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if(!j.client_email||!j.private_key) process.exit(1);" "$SA_PATH"; then
+            rm -f "$SA_PATH"
+            echo "::error::Isi secret FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0280945316 bukan JSON Service Account yang valid. Salin utuh file .json dari { sampai }."
+            exit 1
+          fi
+          export GOOGLE_APPLICATION_CREDENTIALS="$SA_PATH"
+          npx --yes firebase-tools deploy --only hosting --project gen-lang-client-0280945316 --non-interactive
+          STATUS=$?
+          rm -f "$SA_PATH"
+          exit $STATUS
