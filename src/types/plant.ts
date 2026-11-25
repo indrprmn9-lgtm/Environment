@@ -171,7 +171,30 @@ export const DIMENSION_BOUNDS = {
 } as const;
 
 export const MAX_PHOTO_BYTES = 150 * 1024;
-export const MAX_GNSS_ACCURACY_M = 3;
+export const MAX_GNSS_ACCURACY_M = 10;
+
+export type GnssModeKey = 'optimal' | 'precision_static' | 'continuous' | 'fast';
+
+export interface GnssAccuracySettings {
+  companyKey: string; // 'ALL' | 'pt_nbss' | 'pt_dtsa' | 'pt_dtr'
+  enforced: boolean;
+  defaultMaxAccuracyM: number;
+  modeThresholds: Record<GnssModeKey, number>;
+  updatedByUid?: string;
+  updatedAt?: string;
+}
+
+export const DEFAULT_GNSS_ACCURACY_SETTINGS: GnssAccuracySettings = {
+  companyKey: 'ALL',
+  enforced: true,
+  defaultMaxAccuracyM: MAX_GNSS_ACCURACY_M,
+  modeThresholds: {
+    optimal: 10,
+    precision_static: 10,
+    continuous: 10,
+    fast: 10,
+  },
+};
 
 export interface StaffMember {
   id: string;
@@ -226,6 +249,7 @@ export interface PlantRecord {
   horizontalAccuracyM?: number | null;
   verticalAccuracyM?: number | null;
   gnssSource?: string | null;
+  gnssOverrideReason?: string | null;
   coordCrs?: string | null;
   photoDataUrl?: string | null;
   sheetSyncedAt?: string | null;

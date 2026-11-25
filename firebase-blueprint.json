@@ -89,6 +89,7 @@
         "horizontalAccuracyM": { "type": "number" },
         "verticalAccuracyM": { "type": "number" },
         "gnssSource": { "type": "string", "maxLength": 120 },
+        "gnssOverrideReason": { "type": "string", "maxLength": 250 },
         "coordCrs": { "type": "string", "maxLength": 40 },
         "photoDataUrl": { "type": "string", "maxLength": 250000 },
         "sheetSyncedAt": { "type": "string", "maxLength": 40 },
@@ -269,6 +270,20 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["companyKey", "enabled", "minSurvivalPct", "minDeltaHeightCm", "updatedByUid", "updatedAt"]
+    },
+    "GnssAccuracySettings": {
+      "title": "GnssAccuracySettings",
+      "description": "Admin-configurable mandatory GNSS accuracy thresholds per company and acquisition mode",
+      "type": "object",
+      "properties": {
+        "companyKey": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "enforced": { "type": "boolean" },
+        "defaultMaxAccuracyM": { "type": "number" },
+        "modeThresholds": { "type": "object" },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["companyKey", "enforced", "defaultMaxAccuracyM", "modeThresholds", "updatedByUid", "updatedAt"]
     }
   },
   "firestore": {
@@ -327,6 +342,10 @@
     "/growth_eval_settings/{companyKey}": {
       "schema": { "$ref": "#/entities/GrowthEvalSettings" },
       "description": "Optional admin-configured evaluation thresholds per company"
+    },
+    "/gnss_accuracy_settings/{companyKey}": {
+      "schema": { "$ref": "#/entities/GnssAccuracySettings" },
+      "description": "Admin-configured mandatory GNSS accuracy thresholds per company and capture mode"
     }
   }
 }

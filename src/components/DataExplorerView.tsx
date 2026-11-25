@@ -52,6 +52,7 @@ export const DataExplorerView: React.FC = () => {
     profile,
     sheetsAccessToken,
     connectGoogleSheets,
+    clearSheetsToken,
   } = useAuth();
   const {
     allRecords,
@@ -350,11 +351,25 @@ export const DataExplorerView: React.FC = () => {
       await loadPage();
     } catch (err) {
       setPendingConfirm(null);
-      setSheetError(
+      const rawMsg =
         err instanceof Error
           ? err.message
-          : 'Gagal menyinkronkan data ke Google Sheets.'
-      );
+          : 'Gagal menyinkronkan data ke Google Sheets.';
+      const lower = rawMsg.toLowerCase();
+      if (
+        lower.includes('insufficient authentication scopes') ||
+        lower.includes('unauthenticated') ||
+        lower.includes('invalid credentials') ||
+        lower.includes('(401)') ||
+        lower.includes('(403)')
+      ) {
+        clearSheetsToken();
+        setSheetError(
+          'Izin akses Google Sheets belum aktif atau kedaluwarsa. Klik tombol "Hubungkan Google Sheets" di kanan atas, lalu pastikan Anda mencentang izin akses Google Sheets pada jendela login Google.'
+        );
+      } else {
+        setSheetError(rawMsg);
+      }
     } finally {
       setSheetBusyCompany(null);
     }
@@ -700,7 +715,7 @@ export const DataExplorerView: React.FC = () => {
                         onChange={(e) => setLinkUrlInput(e.target.value)}
                         placeholder="Tempel URL atau ID Spreadsheet..."
                         required
-                        className="w-full min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-xs"
+                        className="w-full min-h-[44px] sm:min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-base sm:text-xs"
                       />
                       <div className="flex gap-2">
                         <button
@@ -838,7 +853,7 @@ export const DataExplorerView: React.FC = () => {
                   </div>
                   <div className="text-red-700">{c.syncError}</div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto">
                   <input
                     type="text"
                     inputMode="numeric"
@@ -850,7 +865,7 @@ export const DataExplorerView: React.FC = () => {
                         [c.id]: e.target.value.replace(/\D/g, ''),
                       }))
                     }
-                    className="w-28 min-h-[38px] rounded-lg border border-stone-300 px-2.5 text-xs font-mono"
+                    className="w-28 min-h-[42px] sm:min-h-[38px] rounded-lg border border-stone-300 px-2.5 text-base sm:text-xs font-mono"
                   />
                   <button
                     type="button"
@@ -862,14 +877,14 @@ export const DataExplorerView: React.FC = () => {
                         resolveConflictChangeNumber(c.id, nextNo);
                       }
                     }}
-                    className="min-h-[38px] px-3 py-1.5 rounded-lg bg-[#14532D] text-white text-xs font-semibold hover:bg-[#0F3F22]"
+                    className="flex-1 sm:flex-none min-h-[42px] sm:min-h-[38px] px-3 py-1.5 rounded-lg bg-[#14532D] text-white text-xs font-semibold hover:bg-[#0F3F22] whitespace-nowrap"
                   >
                     Simpan Nomor Baru
                   </button>
                   <button
                     type="button"
                     onClick={() => discardPendingRecord(c.id)}
-                    className="min-h-[38px] px-2.5 py-1.5 rounded-lg border border-stone-300 text-xs text-stone-600 hover:bg-[#F6F7F4]"
+                    className="min-h-[42px] sm:min-h-[38px] px-2.5 py-1.5 rounded-lg border border-stone-300 text-xs text-stone-600 hover:bg-[#F6F7F4] whitespace-nowrap"
                   >
                     Hapus Antrean
                   </button>
@@ -882,8 +897,8 @@ export const DataExplorerView: React.FC = () => {
 
       {/* Filter Bar */}
       <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap gap-1 p-1 bg-[#F6F7F4] border border-stone-200/80 rounded-xl w-fit">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-1 p-1 bg-[#F6F7F4] border border-stone-200/80 rounded-xl w-full sm:w-fit">
             {(lockedCompany ? ([lockedCompany] as const) : (['ALL', ...COMPANIES] as const)).map(
               (comp) => (
                 <button
@@ -895,22 +910,22 @@ export const DataExplorerView: React.FC = () => {
                     setLokasiFilter('ALL');
                     setPage(1);
                   }}
-                  className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                  className={`flex-1 sm:flex-none min-h-[40px] sm:min-h-[38px] px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
                     companyFilter === comp
                       ? 'bg-[#14532D] text-white'
                       : 'text-stone-600 hover:text-[#141A15]'
                   }`}
                 >
-                  {comp === 'ALL' ? 'Semua Perusahaan' : comp}
+                  {comp === 'ALL' ? 'Semua PT' : comp}
                 </button>
               )
             )}
           </div>
 
-          <div className="flex flex-wrap gap-1 p-1 bg-[#F6F7F4] border border-stone-200/80 rounded-xl w-fit">
+          <div className="grid grid-cols-4 sm:flex sm:flex-wrap gap-1 p-1 bg-[#F6F7F4] border border-stone-200/80 rounded-xl w-full sm:w-fit">
             {(
               [
-                { id: 'ALL', label: 'Semua Menu' },
+                { id: 'ALL', label: 'Semua' },
                 { id: 'SENSUS', label: 'Sensus' },
                 { id: 'MONITORING_IPPKH', label: 'IPPKH' },
                 { id: 'MONITORING_APL', label: 'APL' },
@@ -923,7 +938,7 @@ export const DataExplorerView: React.FC = () => {
                   setMenuFilter(tab.id);
                   setPage(1);
                 }}
-                className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                className={`min-h-[40px] sm:min-h-[38px] px-2 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap text-center ${
                   menuFilter === tab.id
                     ? 'bg-white text-[#141A15] border border-stone-200'
                     : 'text-stone-600 hover:text-[#141A15]'
@@ -943,7 +958,7 @@ export const DataExplorerView: React.FC = () => {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Cari nomor, jenis, petak, petugas..."
-              className="w-full min-h-[44px] rounded-xl border border-stone-300 pl-9 pr-3 text-xs text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+              className="w-full min-h-[44px] rounded-xl border border-stone-300 pl-9 pr-3 text-base sm:text-xs text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
             />
           </div>
 
@@ -953,7 +968,7 @@ export const DataExplorerView: React.FC = () => {
               setLokasiFilter(e.target.value);
               setPage(1);
             }}
-            className="w-full min-h-[44px] rounded-xl border border-stone-300 bg-white px-3 text-xs text-[#141A15] focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+            className="w-full min-h-[44px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs text-[#141A15] focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
           >
             <option value="ALL">Semua Lokasi</option>
             {visibleLocations.map((loc) => (
@@ -971,7 +986,7 @@ export const DataExplorerView: React.FC = () => {
               setPeriodeFilter(e.target.value);
               setPage(1);
             }}
-            className="w-full min-h-[44px] rounded-xl border border-stone-300 bg-white px-3 text-xs font-mono text-[#141A15] focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+            className="w-full min-h-[44px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs font-mono text-[#141A15] focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
           >
             <option value="ALL">Semua Periode</option>
             {periodOptions.map((p) => (
@@ -987,7 +1002,7 @@ export const DataExplorerView: React.FC = () => {
               setKondisiFilter(e.target.value as 'ALL' | PlantCondition);
               setPage(1);
             }}
-            className="w-full min-h-[44px] rounded-xl border border-stone-300 bg-white px-3 text-xs text-[#141A15] focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+            className="w-full min-h-[44px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs text-[#141A15] focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
           >
             <option value="ALL">Semua Kondisi</option>
             {PLANT_CONDITIONS.map((k) => (
@@ -1034,211 +1049,398 @@ export const DataExplorerView: React.FC = () => {
             )}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-[#F6F7F4] border-b border-stone-200 text-[11px] font-semibold text-stone-600">
-                  <th className="py-3 px-4">Tanggal</th>
-                  <th className="py-3 px-3">Perusahaan</th>
-                  <th className="py-3 px-3">Menu</th>
-                  <th className="py-3 px-3">Lokasi & Petak</th>
-                  <th className="py-3 px-3 text-right">No. Tan</th>
-                  <th className="py-3 px-3">Jenis (Kelompok)</th>
-                  <th className="py-3 px-3 text-right">Tinggi</th>
-                  <th className="py-3 px-3 text-right">Diam.</th>
-                  <th className="py-3 px-3">Kondisi</th>
-                  <th className="py-3 px-3">GNSS & Foto</th>
-                  <th className="py-3 px-3">Lapangan / Tajuk</th>
-                  <th className="py-3 px-3">Petugas</th>
-                  {isAdmin && <th className="py-3 px-4 text-right">Aksi</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-stone-100 text-xs">
-                {displayedRecords.map((rec) => {
-                  const fc =
-                    rec.menuType !== 'SENSUS'
-                      ? condLookup.get(
-                          `${rec.companyKey}__${rec.menuType}__${rec.lokasiKey}__${rec.periode}`
-                        )
-                      : undefined;
-                  const cc =
-                    rec.menuType === 'MONITORING_APL'
-                      ? canopyLookup.get(
-                          `${rec.companyKey}__${rec.lokasiKey}__${rec.petakKey}__${rec.periode}`
-                        )
-                      : undefined;
-                  const hasGnss =
-                    rec.latitude != null && rec.longitude != null;
+          <>
+            {/* Mobile & Tablet Card List (eliminates 13-col horizontal table scrolling on phones) */}
+            <div className="lg:hidden divide-y divide-stone-200/80">
+              {displayedRecords.map((rec) => {
+                const fc =
+                  rec.menuType !== 'SENSUS'
+                    ? condLookup.get(
+                        `${rec.companyKey}__${rec.menuType}__${rec.lokasiKey}__${rec.periode}`
+                      )
+                    : undefined;
+                const cc =
+                  rec.menuType === 'MONITORING_APL'
+                    ? canopyLookup.get(
+                        `${rec.companyKey}__${rec.lokasiKey}__${rec.petakKey}__${rec.periode}`
+                      )
+                    : undefined;
+                const hasGnss = rec.latitude != null && rec.longitude != null;
 
-                  return (
-                    <tr key={rec.id} className="hover:bg-[#F6F7F4]/70">
-                      <td className="py-2.5 px-4 font-mono tabular-nums text-stone-700 whitespace-nowrap">
-                        <div>{rec.tanggalInput}</div>
-                        {rec.waktuInput && (
-                          <div className="text-[11px] text-stone-500">
-                            {rec.waktuInput}
-                          </div>
-                        )}
-                        {rec.syncStatus === 'pending' && (
-                          <div className="text-[10px] text-amber-800 font-sans font-semibold">
-                            Offline (Menunggu Sinyal)
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 font-semibold text-[#141A15] whitespace-nowrap">
-                        {rec.perusahaan}
-                      </td>
-                      <td className="py-2.5 px-3 text-stone-700 whitespace-nowrap">
-                        {getMenuLabel(rec.menuType)}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="font-semibold text-[#141A15]">
-                          {rec.lokasi}
-                        </div>
-                        {rec.menuType !== 'SENSUS' && rec.nomorPetak && (
-                          <div className="text-stone-500">
-                            Petak {rec.nomorPetak}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-[#141A15]">
-                        #{rec.nomorTanaman}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="font-medium text-[#141A15]">
-                          {rec.jenisTanaman}
-                        </div>
-                        <div className="text-[11px] text-stone-500">
-                          {rec.kelompokTanaman === 'FGS'
-                            ? 'Fast Growing'
-                            : 'Lokal / MPTS'}
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#141A15] whitespace-nowrap">
-                        {rec.kondisiTanaman === 'Mati' ? (
-                          <span className="text-stone-400">-</span>
-                        ) : (
-                          `${rec.tinggiCm} cm`
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#141A15] whitespace-nowrap">
-                        {rec.kondisiTanaman === 'Mati' ? (
-                          <span className="text-stone-400">-</span>
-                        ) : (
-                          `${rec.diameterMm} mm`
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        <span
-                          className={`font-semibold ${
-                            rec.kondisiTanaman === 'Sehat'
-                              ? 'text-[#14532D]'
-                              : rec.kondisiTanaman === 'Kurang Sehat'
-                              ? 'text-amber-700'
-                              : rec.kondisiTanaman === 'Merana'
-                              ? 'text-orange-700'
-                              : 'text-red-700'
-                          }`}
-                        >
-                          {rec.kondisiTanaman}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        {hasGnss || rec.photoDataUrl ? (
-                          <button
-                            type="button"
-                            onClick={() => setInspectRecord(rec)}
-                            className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#14532D] hover:underline"
+                return (
+                  <div key={rec.id} className="p-4 space-y-2.5 text-xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <span className="font-mono tabular-nums font-bold text-sm text-[#141A15]">
+                            #{rec.nomorTanaman}
+                          </span>
+                          <span className="font-semibold text-sm text-[#141A15]">
+                            {rec.jenisTanaman}
+                          </span>
+                          <span
+                            className={`font-semibold ${
+                              rec.kondisiTanaman === 'Sehat'
+                                ? 'text-[#14532D]'
+                                : rec.kondisiTanaman === 'Kurang Sehat'
+                                ? 'text-amber-700'
+                                : rec.kondisiTanaman === 'Merana'
+                                ? 'text-orange-700'
+                                : 'text-red-700'
+                            }`}
                           >
-                            {hasGnss && (
-                              <span className="inline-flex items-center gap-0.5 font-mono">
-                                <MapPin className="w-3 h-3" />
-                                {rec.horizontalAccuracyM != null
-                                  ? `±${rec.horizontalAccuracyM}m`
-                                  : 'GNSS'}
-                              </span>
-                            )}
-                            {rec.photoDataUrl && (
-                              <span className="inline-flex items-center gap-0.5">
-                                <Camera className="w-3 h-3" />
-                                Foto
-                              </span>
-                            )}
-                          </button>
-                        ) : (
-                          <span className="text-stone-400">-</span>
+                            · {rec.kondisiTanaman}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-stone-500 mt-0.5">
+                          {rec.perusahaan} · {getMenuLabel(rec.menuType)} ·{' '}
+                          <span className="font-semibold text-stone-700">
+                            {rec.lokasi}
+                          </span>
+                          {rec.menuType !== 'SENSUS' && rec.nomorPetak
+                            ? ` · Petak ${rec.nomorPetak}`
+                            : ''}
+                        </div>
+                      </div>
+
+                      <div className="text-right font-mono tabular-nums text-[11px] text-stone-500 shrink-0">
+                        <div>{rec.tanggalInput}</div>
+                        {rec.waktuInput && <div>{rec.waktuInput}</div>}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#F6F7F4] border border-stone-200/70 px-3 py-2">
+                      <div className="font-mono tabular-nums text-[#141A15] font-semibold">
+                        {rec.kondisiTanaman === 'Mati'
+                          ? 'Tinggi / Diam: -'
+                          : `T: ${rec.tinggiCm} cm · D: ${rec.diameterMm} mm`}
+                      </div>
+                      <div className="text-[11px] text-stone-600">
+                        Petugas:{' '}
+                        <span className="font-semibold text-[#141A15]">
+                          {rec.namaPetugas}
+                        </span>
+                      </div>
+                    </div>
+
+                    {rec.menuType !== 'SENSUS' && (fc || cc) && (
+                      <div className="text-[11px] text-stone-600 flex flex-wrap gap-x-3 gap-y-0.5">
+                        {fc && (
+                          <span>
+                            CC: {fc.coverCrop} · Kons:{' '}
+                            {fc.bangunanKonservasi === 'Ada'
+                              ? `Ada (${fc.jumlahBangunan})`
+                              : 'Tidak Ada'}
+                          </span>
                         )}
-                      </td>
-                      <td className="py-2.5 px-3 text-[11px] text-stone-600">
-                        {rec.menuType === 'SENSUS' ? (
-                          <span className="text-stone-400">-</span>
-                        ) : (
-                          <div className="space-y-0.5">
-                            {fc ? (
-                              <div>
-                                CC: {fc.coverCrop} · Kons:{' '}
-                                {fc.bangunanKonservasi === 'Ada'
-                                  ? `Ada (${fc.jumlahBangunan})`
-                                  : 'Tidak Ada'}
-                              </div>
-                            ) : (
-                              <div className="text-stone-400">
-                                Kondisi lokasi belum diisi
-                              </div>
-                            )}
-                            {rec.menuType === 'MONITORING_APL' && (
-                              <div>
-                                Tajuk:{' '}
-                                <span className="font-medium text-stone-800">
-                                  {cc ? cc.penutupanTajuk : '-'}
-                                </span>
-                              </div>
-                            )}
+                        {rec.menuType === 'MONITORING_APL' && cc && (
+                          <span>Tajuk: {cc.penutupanTajuk}</span>
+                        )}
+                      </div>
+                    )}
+
+                    {rec.keterangan && (
+                      <p className="text-[11px] text-stone-500 italic">
+                        &ldquo;{rec.keterangan}&rdquo;
+                      </p>
+                    )}
+
+                    {rec.syncStatus === 'pending' && (
+                      <div className="text-[11px] text-amber-800 font-semibold">
+                        Offline (Menunggu Sinyal)
+                      </div>
+                    )}
+
+                    {(hasGnss ||
+                      rec.gnssOverrideReason ||
+                      rec.photoDataUrl ||
+                      (isAdmin && rec.syncStatus === 'synced')) && (
+                      <div className="space-y-1.5 pt-1">
+                        {rec.gnssOverrideReason && (
+                          <div className="rounded-lg bg-amber-50 border border-amber-200 px-2.5 py-1.5 text-[11px] text-amber-900">
+                            <span className="font-semibold">Alasan GNSS:</span>{' '}
+                            {rec.gnssOverrideReason}
                           </div>
                         )}
-                      </td>
-                      <td className="py-2.5 px-3 text-stone-700">
-                        <div>{rec.namaPetugas}</div>
-                        {rec.keterangan && (
-                          <div className="text-[11px] text-stone-400 truncate max-w-[140px]">
-                            {rec.keterangan}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            {(hasGnss || rec.photoDataUrl || rec.gnssOverrideReason) && (
+                              <button
+                                type="button"
+                                onClick={() => setInspectRecord(rec)}
+                                className={`min-h-[38px] px-3 rounded-lg border bg-white inline-flex items-center gap-2 text-[11px] font-semibold ${
+                                  rec.gnssOverrideReason
+                                    ? 'border-amber-300 text-amber-800 hover:bg-amber-50'
+                                    : 'border-stone-200 text-[#14532D] hover:bg-[#F2F7F3]'
+                                }`}
+                              >
+                                {(hasGnss || rec.gnssOverrideReason) && (
+                                  <span className="inline-flex items-center gap-1 font-mono">
+                                    <MapPin className="w-3.5 h-3.5" />
+                                    {rec.horizontalAccuracyM != null
+                                      ? `±${rec.horizontalAccuracyM}m`
+                                      : 'GNSS'}
+                                  </span>
+                                )}
+                                {rec.photoDataUrl && (
+                                  <span className="inline-flex items-center gap-1">
+                                    <Camera className="w-3.5 h-3.5" />
+                                    Foto
+                                  </span>
+                                )}
+                              </button>
+                            )}
+                          </div>
+
+                        {isAdmin && rec.syncStatus === 'synced' && (
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(rec)}
+                              className="min-h-[38px] px-3 rounded-lg border border-stone-200 text-stone-700 hover:bg-stone-100 inline-flex items-center gap-1 text-[11px] font-semibold"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteTarget(rec)}
+                              className="min-h-[38px] min-w-[38px] rounded-lg border border-stone-200 text-red-600 hover:bg-red-50 inline-flex items-center justify-center"
+                              title="Hapus data"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         )}
-                      </td>
-                      {isAdmin && (
-                        <td className="py-2.5 px-4 text-right whitespace-nowrap">
-                          {rec.syncStatus === 'synced' ? (
-                            <div className="inline-flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => openEditModal(rec)}
-                                className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-stone-600 hover:bg-stone-100 hover:text-[#141A15]"
-                                title="Edit data"
-                              >
-                                <Edit2 className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setDeleteTarget(rec)}
-                                className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-stone-500 hover:bg-red-50 hover:text-red-700"
-                                title="Hapus data"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop Table */}
+            <div className="hidden lg:block overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-[#F6F7F4] border-b border-stone-200 text-[11px] font-semibold text-stone-600">
+                    <th className="py-3 px-4">Tanggal</th>
+                    <th className="py-3 px-3">Perusahaan</th>
+                    <th className="py-3 px-3">Menu</th>
+                    <th className="py-3 px-3">Lokasi & Petak</th>
+                    <th className="py-3 px-3 text-right">No. Tan</th>
+                    <th className="py-3 px-3">Jenis (Kelompok)</th>
+                    <th className="py-3 px-3 text-right">Tinggi</th>
+                    <th className="py-3 px-3 text-right">Diam.</th>
+                    <th className="py-3 px-3">Kondisi</th>
+                    <th className="py-3 px-3">GNSS & Foto</th>
+                    <th className="py-3 px-3">Lapangan / Tajuk</th>
+                    <th className="py-3 px-3">Petugas</th>
+                    {isAdmin && <th className="py-3 px-4 text-right">Aksi</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100 text-xs">
+                  {displayedRecords.map((rec) => {
+                    const fc =
+                      rec.menuType !== 'SENSUS'
+                        ? condLookup.get(
+                            `${rec.companyKey}__${rec.menuType}__${rec.lokasiKey}__${rec.periode}`
+                          )
+                        : undefined;
+                    const cc =
+                      rec.menuType === 'MONITORING_APL'
+                        ? canopyLookup.get(
+                            `${rec.companyKey}__${rec.lokasiKey}__${rec.petakKey}__${rec.periode}`
+                          )
+                        : undefined;
+                    const hasGnss =
+                      rec.latitude != null && rec.longitude != null;
+
+                    return (
+                      <tr key={rec.id} className="hover:bg-[#F6F7F4]/70">
+                        <td className="py-2.5 px-4 font-mono tabular-nums text-stone-700 whitespace-nowrap">
+                          <div>{rec.tanggalInput}</div>
+                          {rec.waktuInput && (
+                            <div className="text-[11px] text-stone-500">
+                              {rec.waktuInput}
                             </div>
-                          ) : (
-                            <span className="text-[11px] text-stone-400">
-                              Antrean
-                            </span>
+                          )}
+                          {rec.syncStatus === 'pending' && (
+                            <div className="text-[10px] text-amber-800 font-sans font-semibold">
+                              Offline (Menunggu Sinyal)
+                            </div>
                           )}
                         </td>
-                      )}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        <td className="py-2.5 px-3 font-semibold text-[#141A15] whitespace-nowrap">
+                          {rec.perusahaan}
+                        </td>
+                        <td className="py-2.5 px-3 text-stone-700 whitespace-nowrap">
+                          {getMenuLabel(rec.menuType)}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="font-semibold text-[#141A15]">
+                            {rec.lokasi}
+                          </div>
+                          {rec.menuType !== 'SENSUS' && rec.nomorPetak && (
+                            <div className="text-stone-500">
+                              Petak {rec.nomorPetak}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-[#141A15]">
+                          #{rec.nomorTanaman}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="font-medium text-[#141A15]">
+                            {rec.jenisTanaman}
+                          </div>
+                          <div className="text-[11px] text-stone-500">
+                            {rec.kelompokTanaman === 'FGS'
+                              ? 'Fast Growing'
+                              : 'Lokal / MPTS'}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#141A15] whitespace-nowrap">
+                          {rec.kondisiTanaman === 'Mati' ? (
+                            <span className="text-stone-400">-</span>
+                          ) : (
+                            `${rec.tinggiCm} cm`
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#141A15] whitespace-nowrap">
+                          {rec.kondisiTanaman === 'Mati' ? (
+                            <span className="text-stone-400">-</span>
+                          ) : (
+                            `${rec.diameterMm} mm`
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span
+                            className={`font-semibold ${
+                              rec.kondisiTanaman === 'Sehat'
+                                ? 'text-[#14532D]'
+                                : rec.kondisiTanaman === 'Kurang Sehat'
+                                ? 'text-amber-700'
+                                : rec.kondisiTanaman === 'Merana'
+                                ? 'text-orange-700'
+                                : 'text-red-700'
+                            }`}
+                          >
+                            {rec.kondisiTanaman}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          {hasGnss || rec.photoDataUrl || rec.gnssOverrideReason ? (
+                            <div className="space-y-0.5">
+                              <button
+                                type="button"
+                                onClick={() => setInspectRecord(rec)}
+                                className={`inline-flex items-center gap-1.5 text-[11px] font-semibold hover:underline ${
+                                  rec.gnssOverrideReason
+                                    ? 'text-amber-700'
+                                    : 'text-[#14532D]'
+                                }`}
+                              >
+                                {(hasGnss || rec.gnssOverrideReason) && (
+                                  <span className="inline-flex items-center gap-0.5 font-mono">
+                                    <MapPin className="w-3 h-3" />
+                                    {rec.horizontalAccuracyM != null
+                                      ? `±${rec.horizontalAccuracyM}m`
+                                      : 'GNSS'}
+                                  </span>
+                                )}
+                                {rec.photoDataUrl && (
+                                  <span className="inline-flex items-center gap-0.5">
+                                    <Camera className="w-3 h-3" />
+                                    Foto
+                                  </span>
+                                )}
+                              </button>
+                              {rec.gnssOverrideReason && (
+                                <div
+                                  className="text-[10px] text-amber-800 max-w-[150px] truncate"
+                                  title={rec.gnssOverrideReason}
+                                >
+                                  Alasan: {rec.gnssOverrideReason}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-stone-400">-</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-[11px] text-stone-600">
+                          {rec.menuType === 'SENSUS' ? (
+                            <span className="text-stone-400">-</span>
+                          ) : (
+                            <div className="space-y-0.5">
+                              {fc ? (
+                                <div>
+                                  CC: {fc.coverCrop} · Kons:{' '}
+                                  {fc.bangunanKonservasi === 'Ada'
+                                    ? `Ada (${fc.jumlahBangunan})`
+                                    : 'Tidak Ada'}
+                                </div>
+                              ) : (
+                                <div className="text-stone-400">
+                                  Kondisi lokasi belum diisi
+                                </div>
+                              )}
+                              {rec.menuType === 'MONITORING_APL' && (
+                                <div>
+                                  Tajuk:{' '}
+                                  <span className="font-medium text-stone-800">
+                                    {cc ? cc.penutupanTajuk : '-'}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-stone-700">
+                          <div>{rec.namaPetugas}</div>
+                          {rec.keterangan && (
+                            <div className="text-[11px] text-stone-400 truncate max-w-[140px]">
+                              {rec.keterangan}
+                            </div>
+                          )}
+                        </td>
+                        {isAdmin && (
+                          <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                            {rec.syncStatus === 'synced' ? (
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => openEditModal(rec)}
+                                  className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-stone-600 hover:bg-stone-100 hover:text-[#141A15]"
+                                  title="Edit data"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeleteTarget(rec)}
+                                  className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg text-stone-500 hover:bg-red-50 hover:text-red-700"
+                                  title="Hapus data"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-[11px] text-stone-400">
+                                Antrean
+                              </span>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
 
         {/* Pagination Footer */}
@@ -1271,8 +1473,8 @@ export const DataExplorerView: React.FC = () => {
 
       {/* Mandatory Confirmation Modal before Creating / Writing to Google Sheets */}
       {pendingConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md bg-white border border-stone-200 rounded-2xl p-6 shadow-xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto bg-white border border-stone-200 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4 my-auto">
             <div className="flex items-center gap-2 text-base font-bold text-[#141A15] font-display">
               <FileSpreadsheet className="w-5 h-5 text-[#14532D]" />
               <span>
@@ -1347,8 +1549,8 @@ export const DataExplorerView: React.FC = () => {
 
       {/* GNSS & Photo Inspection Modal */}
       {inspectRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md bg-white border border-stone-200 rounded-2xl p-5 shadow-xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto bg-white border border-stone-200 rounded-2xl p-5 shadow-xl space-y-4 my-auto">
             <div className="flex items-center justify-between border-b border-stone-200/80 pb-3">
               <div>
                 <h3 className="text-sm font-bold text-[#141A15] font-display">
@@ -1365,7 +1567,7 @@ export const DataExplorerView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setInspectRecord(null)}
-                className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100"
+                className="min-h-[44px] min-w-[44px] sm:min-h-[36px] sm:min-w-[36px] flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100 shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1392,6 +1594,17 @@ export const DataExplorerView: React.FC = () => {
                 </div>
               )}
 
+            {inspectRecord.gnssOverrideReason && (
+              <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 space-y-0.5">
+                <div className="font-semibold">
+                  Melebihi Ambang Batas Akurasi GNSS
+                </div>
+                <p className="text-[11px] leading-relaxed">
+                  Alasan Petugas: {inspectRecord.gnssOverrideReason}
+                </p>
+              </div>
+            )}
+
             {inspectRecord.photoDataUrl ? (
               <div className="space-y-1.5">
                 <img
@@ -1417,7 +1630,7 @@ export const DataExplorerView: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-4 overflow-y-auto">
           <form
             onSubmit={handleSaveEdit}
-            className="w-full max-w-lg bg-white border border-stone-200 rounded-2xl p-6 shadow-xl space-y-4 my-auto"
+            className="w-full max-w-lg max-h-[90dvh] overflow-y-auto bg-white border border-stone-200 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4 my-auto"
           >
             <div className="flex items-center justify-between border-b border-stone-200/80 pb-3">
               <h3 className="text-base font-bold text-[#141A15] font-display">
@@ -1426,7 +1639,7 @@ export const DataExplorerView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setEditingRecord(null)}
-                className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100"
+                className="min-h-[44px] min-w-[44px] sm:min-h-[36px] sm:min-w-[36px] flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1442,7 +1655,7 @@ export const DataExplorerView: React.FC = () => {
                   onChange={(e) =>
                     setEditPerusahaan(e.target.value as CompanyName)
                   }
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 font-semibold"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs font-semibold"
                 >
                   {COMPANIES.map((comp) => (
                     <option key={comp} value={comp}>
@@ -1460,7 +1673,7 @@ export const DataExplorerView: React.FC = () => {
                   value={editTanggal}
                   onChange={(e) => setEditTanggal(e.target.value)}
                   required
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 px-3 font-mono"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 px-3 text-base sm:text-xs font-mono"
                 />
               </div>
               <div className="space-y-1">
@@ -1472,7 +1685,7 @@ export const DataExplorerView: React.FC = () => {
                   value={editPetugas}
                   onChange={(e) => setEditPetugas(e.target.value)}
                   required
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 px-3"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 px-3 text-base sm:text-xs"
                 />
               </div>
               <div className="space-y-1">
@@ -1482,7 +1695,7 @@ export const DataExplorerView: React.FC = () => {
                   value={editLokasi}
                   onChange={(e) => setEditLokasi(e.target.value)}
                   required
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 px-3"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 px-3 text-base sm:text-xs"
                 />
               </div>
               {editingRecord.menuType !== 'SENSUS' && (
@@ -1495,7 +1708,7 @@ export const DataExplorerView: React.FC = () => {
                     value={editPetak}
                     onChange={(e) => setEditPetak(e.target.value)}
                     required
-                    className="w-full min-h-[42px] rounded-xl border border-stone-300 px-3"
+                    className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 px-3 text-base sm:text-xs"
                   />
                 </div>
               )}
@@ -1511,7 +1724,7 @@ export const DataExplorerView: React.FC = () => {
                     setEditNomor(e.target.value.replace(/\D/g, ''))
                   }
                   required
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 px-3 font-mono"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 px-3 text-base sm:text-xs font-mono"
                 />
               </div>
               <div className="space-y-1">
@@ -1529,7 +1742,7 @@ export const DataExplorerView: React.FC = () => {
                     );
                     if (nextList.length > 0) setEditJenis(nextList[0]);
                   }}
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 bg-white px-3"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs"
                 >
                   <option value="FGS">1. Fast Growing (FGS)</option>
                   <option value="LOKAL_MPTS">2. Lokal / MPTS</option>
@@ -1542,7 +1755,7 @@ export const DataExplorerView: React.FC = () => {
                 <select
                   value={editJenis}
                   onChange={(e) => setEditJenis(e.target.value)}
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 bg-white px-3"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs"
                 >
                   {editSpeciesOptions.map((sp) => (
                     <option key={sp} value={sp}>
@@ -1569,7 +1782,7 @@ export const DataExplorerView: React.FC = () => {
                       if (editDiameter === '0') setEditDiameter('');
                     }
                   }}
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 bg-white px-3"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs"
                 >
                   {PLANT_CONDITIONS.map((k) => (
                     <option key={k} value={k}>
@@ -1594,7 +1807,7 @@ export const DataExplorerView: React.FC = () => {
                     )
                   }
                   required={editKondisi !== 'Mati'}
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 px-3 font-mono disabled:bg-[#F6F7F4] disabled:text-stone-400"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 px-3 text-base sm:text-xs font-mono disabled:bg-[#F6F7F4] disabled:text-stone-400"
                 />
               </div>
               <div className="space-y-1">
@@ -1613,7 +1826,7 @@ export const DataExplorerView: React.FC = () => {
                     )
                   }
                   required={editKondisi !== 'Mati'}
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 px-3 font-mono disabled:bg-[#F6F7F4] disabled:text-stone-400"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 px-3 text-base sm:text-xs font-mono disabled:bg-[#F6F7F4] disabled:text-stone-400"
                 />
               </div>
               <div className="sm:col-span-2 space-y-1">
@@ -1624,7 +1837,7 @@ export const DataExplorerView: React.FC = () => {
                   rows={2}
                   value={editKet}
                   onChange={(e) => setEditKet(e.target.value)}
-                  className="w-full rounded-xl border border-stone-300 p-2.5"
+                  className="w-full rounded-xl border border-stone-300 p-2.5 text-base sm:text-xs"
                 />
               </div>
             </div>

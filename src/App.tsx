@@ -113,7 +113,7 @@ const MainShell: React.FC = () => {
       : activeTab;
 
   return (
-    <div className="relative min-h-screen bg-[#F6F7F4]/90 text-[#141A15] flex flex-col lg:flex-row">
+    <div className="relative isolate min-h-[100dvh] bg-[#F6F7F4]/90 text-[#141A15] flex flex-col lg:flex-row overflow-x-clip">
       <div
         aria-hidden="true"
         className="fixed inset-0 -z-20 bg-[#E7ECE4] bg-cover bg-center pointer-events-none"
@@ -250,28 +250,30 @@ const MainShell: React.FC = () => {
           <span className="w-7 h-7 rounded-lg bg-[#14532D] text-white flex items-center justify-center shrink-0">
             <Sprout className="w-3.5 h-3.5" />
           </span>
-          <span className="text-base font-bold font-display text-[#141A15] whitespace-nowrap truncate">
+          <span className="text-sm sm:text-base font-bold font-display text-[#141A15] whitespace-nowrap truncate max-w-[125px] sm:max-w-none">
             Environment
           </span>
         </div>
 
-        <div className="flex items-center gap-1.5 text-xs shrink-0">
+        <div className="flex items-center gap-1 sm:gap-1.5 text-xs shrink-0">
           {pendingCount > 0 ? (
             <button
               type="button"
               onClick={() => void syncPendingQueue(true)}
               disabled={isSyncing}
-              className="min-h-[34px] px-2.5 py-1 rounded-lg bg-amber-600 text-white font-semibold flex items-center gap-1 disabled:opacity-60"
+              className="min-h-[36px] px-2 sm:px-2.5 py-1 rounded-lg bg-amber-600 text-white font-semibold flex items-center gap-1 disabled:opacity-60 whitespace-nowrap"
             >
               <RefreshCw
-                className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`}
+                className={`w-3 h-3 shrink-0 ${isSyncing ? 'animate-spin' : ''}`}
               />
-              {isOnline ? `Kirim (${pendingCount})` : `Offline (${pendingCount})`}
+              <span>
+                {isOnline ? `Kirim (${pendingCount})` : `(${pendingCount})`}
+              </span>
             </button>
           ) : !isOnline ? (
-            <span className="flex items-center gap-1 text-amber-800 font-semibold whitespace-nowrap">
-              <CloudOff className="w-3.5 h-3.5" />
-              Offline
+            <span className="flex items-center gap-1 text-amber-800 font-semibold whitespace-nowrap px-1">
+              <CloudOff className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden xs:inline">Offline</span>
             </span>
           ) : null}
 
@@ -306,7 +308,7 @@ const MainShell: React.FC = () => {
             </>
           )}
 
-          <PWAInstallButton />
+          <PWAInstallButton compactMobile />
           <button
             type="button"
             onClick={logout}
@@ -319,8 +321,8 @@ const MainShell: React.FC = () => {
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 lg:pl-64">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-7">
+      <main className="flex-1 min-w-0 lg:pl-64">
+        <div className="max-w-[1440px] mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
           {lastSyncError && (
             <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
               <div>

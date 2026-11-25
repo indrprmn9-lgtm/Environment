@@ -4,6 +4,7 @@ import type {
   CanopyCover,
   CompanySpreadsheet,
   FieldCondition,
+  GnssAccuracySettings,
   GrowthEvalSettings,
   LocationMaster,
   PetakMaster,
@@ -38,6 +39,7 @@ export interface CachedServerSnapshot {
   companySpreadsheets: CompanySpreadsheet[];
   baseMaps: BaseMapLayer[];
   evalSettings: GrowthEvalSettings[];
+  gnssSettings: GnssAccuracySettings[];
   staffList: StaffMember[];
   cachedAt: string;
 }
@@ -59,6 +61,7 @@ export const EMPTY_SNAPSHOT: CachedServerSnapshot = {
   companySpreadsheets: [],
   baseMaps: [],
   evalSettings: [],
+  gnssSettings: [],
   staffList: [],
   cachedAt: '',
 };
@@ -196,6 +199,7 @@ export async function loadServerSnapshot(): Promise<CachedServerSnapshot> {
         : [],
       baseMaps: Array.isArray(data.baseMaps) ? data.baseMaps : [],
       evalSettings: Array.isArray(data.evalSettings) ? data.evalSettings : [],
+      gnssSettings: Array.isArray(data.gnssSettings) ? data.gnssSettings : [],
       staffList: Array.isArray(data.staffList) ? data.staffList : [],
       cachedAt: typeof data.cachedAt === 'string' ? data.cachedAt : '',
     };

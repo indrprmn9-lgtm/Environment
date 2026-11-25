@@ -146,7 +146,7 @@ export const StaffManagerView: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         <form
           onSubmit={handleAdd}
-          className="lg:col-span-5 bg-white border border-stone-200 rounded-2xl p-5 space-y-4"
+          className="lg:col-span-5 min-w-0 bg-white border border-stone-200 rounded-2xl p-4 sm:p-5 space-y-4"
         >
           <div className="flex items-center gap-2 text-sm font-bold text-[#141A15] font-display">
             <UserPlus className="w-4 h-4 text-[#14532D]" />
@@ -163,7 +163,7 @@ export const StaffManagerView: React.FC = () => {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="petugas@gmail.com"
               required
-              className="w-full min-h-[44px] rounded-xl border border-stone-300 px-3.5 text-sm font-mono text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+              className="w-full min-h-[44px] rounded-xl border border-stone-300 px-3.5 text-base sm:text-sm font-mono text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
             />
           </div>
 
@@ -177,7 +177,7 @@ export const StaffManagerView: React.FC = () => {
               onChange={(e) => setName(e.target.value)}
               placeholder="Contoh: Budi Santoso"
               required
-              className="w-full min-h-[44px] rounded-xl border border-stone-300 px-3.5 text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+              className="w-full min-h-[44px] rounded-xl border border-stone-300 px-3.5 text-base sm:text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
             />
           </div>
 
@@ -187,7 +187,7 @@ export const StaffManagerView: React.FC = () => {
             </label>
             <div
               className={`grid gap-2 ${
-                role === 'admin' ? 'grid-cols-2' : 'grid-cols-3'
+                role === 'admin' ? 'grid-cols-2' : 'grid-cols-1 sm:grid-cols-3'
               }`}
             >
               {(role === 'admin' ? (['ALL', ...COMPANIES] as const) : COMPANIES).map(
@@ -218,7 +218,7 @@ export const StaffManagerView: React.FC = () => {
           {/* Officer Number Range Allocation */}
           <div className="rounded-xl bg-[#F6F7F4] border border-stone-200 p-3.5 space-y-2">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-stone-800">
-              <Hash className="w-3.5 h-3.5 text-[#14532D]" />
+              <Hash className="w-3.5 h-3.5 text-[#14532D] shrink-0" />
               Alokasi Rentang Nomor Regu Saat Offline (Opsional)
             </div>
             <p className="text-[11px] text-stone-600">
@@ -234,7 +234,7 @@ export const StaffManagerView: React.FC = () => {
                   setRangeStartRaw(e.target.value.replace(/\D/g, ''))
                 }
                 placeholder="Nomor Awal (mis. 1)"
-                className="w-full min-h-[40px] rounded-lg border border-stone-300 bg-white px-3 text-xs font-mono tabular-nums"
+                className="w-full min-h-[44px] sm:min-h-[40px] rounded-lg border border-stone-300 bg-white px-3 text-base sm:text-xs font-mono tabular-nums"
               />
               <input
                 type="text"
@@ -244,7 +244,7 @@ export const StaffManagerView: React.FC = () => {
                   setRangeEndRaw(e.target.value.replace(/\D/g, ''))
                 }
                 placeholder="Nomor Akhir (mis. 200)"
-                className="w-full min-h-[40px] rounded-lg border border-stone-300 bg-white px-3 text-xs font-mono tabular-nums"
+                className="w-full min-h-[44px] sm:min-h-[40px] rounded-lg border border-stone-300 bg-white px-3 text-base sm:text-xs font-mono tabular-nums"
               />
             </div>
           </div>
@@ -307,7 +307,7 @@ export const StaffManagerView: React.FC = () => {
           </button>
         </form>
 
-        <div className="lg:col-span-7 bg-white border border-stone-200 rounded-2xl p-5 space-y-4">
+        <div className="lg:col-span-7 min-w-0 bg-white border border-stone-200 rounded-2xl p-4 sm:p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200/80 pb-3">
             <div className="flex items-center gap-2.5">
               <h2 className="text-sm font-bold text-[#141A15] font-display">
@@ -408,8 +408,8 @@ export const StaffManagerView: React.FC = () => {
                     className="py-4 first:pt-0 last:pb-0 space-y-3"
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="space-y-0.5">
-                        <div className="flex flex-wrap items-center gap-2">
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                           <span className="text-sm font-semibold text-[#141A15]">
                             {staff.name}
                           </span>
@@ -440,7 +440,7 @@ export const StaffManagerView: React.FC = () => {
                             {staff.active ? 'Aktif' : 'Nonaktif'}
                           </span>
                         </div>
-                        <div className="text-xs font-mono text-stone-500">
+                        <div className="text-xs font-mono text-stone-500 break-all">
                           {staff.email}
                           {staff.rangeStart && staff.rangeEnd ? (
                             <span className="ml-2 text-[#14532D] font-semibold">
@@ -468,7 +468,7 @@ export const StaffManagerView: React.FC = () => {
                             })
                           }
                           aria-label={`Perusahaan untuk ${staff.name}`}
-                          className="min-h-[38px] rounded-lg border border-stone-200 bg-white px-2.5 text-xs font-medium text-stone-700"
+                          className="w-full sm:w-auto min-h-[42px] sm:min-h-[38px] rounded-lg border border-stone-200 bg-white px-2.5 text-base sm:text-xs font-medium text-stone-700"
                         >
                           {staff.role === 'admin' ? (
                             <option value="ALL">Semua (3 PT)</option>
@@ -502,7 +502,7 @@ export const StaffManagerView: React.FC = () => {
                               active: staff.active,
                             });
                           }}
-                          className="min-h-[38px] px-2.5 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 hover:bg-[#F6F7F4] flex items-center gap-1"
+                          className="min-h-[42px] sm:min-h-[38px] px-2.5 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 hover:bg-[#F6F7F4] flex items-center gap-1"
                         >
                           <Shield className="w-3.5 h-3.5" />
                           {staff.role === 'admin'
@@ -522,7 +522,7 @@ export const StaffManagerView: React.FC = () => {
                               active: !staff.active,
                             })
                           }
-                          className="min-h-[38px] px-2.5 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 hover:bg-[#F6F7F4] flex items-center gap-1"
+                          className="min-h-[42px] sm:min-h-[38px] px-2.5 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 hover:bg-[#F6F7F4] flex items-center gap-1"
                         >
                           {staff.active ? (
                             <>
@@ -540,7 +540,7 @@ export const StaffManagerView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => adminDeleteStaff(staff.id)}
-                          className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg border border-stone-200 text-red-600 hover:bg-red-50"
+                          className="min-h-[42px] min-w-[42px] sm:min-h-[38px] sm:min-w-[38px] flex items-center justify-center rounded-lg border border-stone-200 text-red-600 hover:bg-red-50"
                           title="Hapus dari daftar"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -567,7 +567,7 @@ export const StaffManagerView: React.FC = () => {
                             },
                           }))
                         }
-                        className="w-20 min-h-[34px] rounded-lg border border-stone-300 bg-white px-2.5 font-mono tabular-nums"
+                        className="w-20 min-h-[40px] sm:min-h-[34px] rounded-lg border border-stone-300 bg-white px-2.5 text-base sm:text-xs font-mono tabular-nums"
                       />
                       <span className="text-stone-400">s/d</span>
                       <input
@@ -584,13 +584,13 @@ export const StaffManagerView: React.FC = () => {
                             },
                           }))
                         }
-                        className="w-20 min-h-[34px] rounded-lg border border-stone-300 bg-white px-2.5 font-mono tabular-nums"
+                        className="w-20 min-h-[40px] sm:min-h-[34px] rounded-lg border border-stone-300 bg-white px-2.5 text-base sm:text-xs font-mono tabular-nums"
                       />
                       {draftDirty && (
                         <button
                           type="button"
                           onClick={() => void handleSaveRowRange(staff)}
-                          className="min-h-[34px] px-3 rounded-lg bg-[#14532D] text-white font-semibold hover:bg-[#0F3F22] flex items-center gap-1"
+                          className="min-h-[40px] sm:min-h-[34px] px-3 rounded-lg bg-[#14532D] text-white font-semibold hover:bg-[#0F3F22] flex items-center gap-1"
                         >
                           <Check className="w-3.5 h-3.5" />
                           Simpan Blok

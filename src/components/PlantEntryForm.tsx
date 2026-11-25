@@ -13,20 +13,25 @@ import {
   Layers,
   Lock,
   MapPin,
+  Navigation,
+  Radio,
   RotateCcw,
+  Satellite,
   Save,
   Sparkles,
   Trash2,
-  Usb,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useData } from '../contexts/DataContext';
 import { formatCoordinatePair } from '../lib/crsTransform';
 import {
-  captureBrowserGnssPoint,
+  GNSS_CAPTURE_MODES,
+  type GnssCaptureController,
+  type GnssCaptureMode,
   type GnssFixResult,
-  parseNmeaGgaSentence,
-  readNmeaFromWebSerial,
+  type GnssProgressInfo,
+  startInternalGnssCapture,
+  startLiveGnssWatcher,
 } from '../lib/gnss';
 import { compressImageToMax150KB } from '../lib/photoCompress';
 import {
@@ -75,6 +80,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
     getNextSuggestedPlantNumber,
     getFieldConditionFor,
     getCanopyCoverFor,
+    getGnssSettingFor,
     savePlantRecord,
     saveFieldCondition,
     saveCanopyCover,
@@ -121,15 +127,32 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
     useState<PlantCondition>('Sehat');
   const [keterangan, setKeterangan] = useState<string>('');
 
-  // GNSS Capture state (auto-capture on submit + manual preview + Trimble/Emlid NMEA)
+  // GNSS Capture state (Internal Smartphone GNSS — offline & online multi-mode)
   const [crsCode, setCrsCode] = useState<CoordCrsCode>('EPSG:4326');
   const [coordFormat, setCoordFormat] = useState<CoordFormatType>('DD');
-  const [requireStrict3m, setRequireStrict3m] = useState<boolean>(true);
+  const [gnssMode, setGnssMode] = useState<GnssCaptureMode>(() => {
+    try {
+      const saved = window.localStorage.getItem('env_gnss_mode');
+      if (
+        saved === 'optimal' ||
+        saved === 'precision_static' ||
+        saved === 'continuous' ||
+        saved === 'fast'
+      ) {
+        return saved;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return 'optimal';
+  });
   const [gnssFix, setGnssFix] = useState<GnssFixResult | null>(null);
   const [gnssLoading, setGnssLoading] = useState<boolean>(false);
+  const [gnssProgress, setGnssProgress] = useState<GnssProgressInfo | null>(null);
   const [gnssStatusNote, setGnssStatusNote] = useState<string | null>(null);
-  const [nmeaModalOpen, setNmeaModalOpen] = useState<boolean>(false);
-  const [nmeaInputText, setNmeaInputText] = useState<string>('');
+  const [liveGnssActive, setLiveGnssActive] = useState<boolean>(false);
+  const gnssControllerRef = useRef<GnssCaptureController | null>(null);
+  const liveStopRef = useRef<(() => void) | null>(null);
 
   // Optional compressed photo (<= 150 KB)
   const [plantPhotoUrl, setPlantPhotoUrl] = useState<string | null>(null);
@@ -167,11 +190,29 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
     diameterMm: number;
     extremeConfirmed: boolean;
     fix: GnssFixResult | null;
-    reason: string;
+    summaryReason: string;
+    overrideReasonText: string;
   } | null>(null);
 
   const isMati = kondisiTanaman === 'Mati';
   const companyKey = useMemo(() => getCompanyKey(perusahaan), [perusahaan]);
+  const activeGnssSetting = useMemo(
+    () => getGnssSettingFor(perusahaan),
+    [getGnssSettingFor, perusahaan]
+  );
+  const activeMaxAccuracyM = useMemo(
+    () =>
+      activeGnssSetting.modeThresholds?.[gnssMode] ??
+      activeGnssSetting.defaultMaxAccuracyM ??
+      MAX_GNSS_ACCURACY_M,
+    [activeGnssSetting, gnssMode]
+  );
+  const isGnssPolicyEnforced = activeGnssSetting.enforced !== false;
+  const isFixWithinPolicy = Boolean(
+    gnssFix &&
+      gnssFix.horizontalAccuracyM !== null &&
+      gnssFix.horizontalAccuracyM <= activeMaxAccuracyM
+  );
   const periode = useMemo(() => extractPeriode(tanggalInput), [tanggalInput]);
   const cleanLokasi = useMemo(() => normalizeDisplayText(lokasi), [lokasi]);
   const cleanPetak = useMemo(
@@ -464,53 +505,113 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
     }
   };
 
-  // GNSS Handlers
-  const handleCaptureGnss = async (): Promise<GnssFixResult | null> => {
-    setGnssLoading(true);
-    setGnssStatusNote(null);
+  // Persist selected internal GNSS acquisition mode & cleanup watchers on unmount
+  useEffect(() => {
     try {
-      const fix = await captureBrowserGnssPoint(10000);
+      window.localStorage.setItem('env_gnss_mode', gnssMode);
+    } catch {
+      // ignore storage errors
+    }
+    if (gnssMode !== 'continuous' && liveStopRef.current) {
+      liveStopRef.current();
+      liveStopRef.current = null;
+      setLiveGnssActive(false);
+    }
+  }, [gnssMode]);
+
+  useEffect(() => {
+    return () => {
+      gnssControllerRef.current?.cancel();
+      liveStopRef.current?.();
+    };
+  }, []);
+
+  const stopLiveGnss = () => {
+    if (liveStopRef.current) {
+      liveStopRef.current();
+      liveStopRef.current = null;
+    }
+    setLiveGnssActive(false);
+  };
+
+  const startOrToggleLiveGnss = () => {
+    if (liveGnssActive) {
+      stopLiveGnss();
+      setGnssStatusNote('Pelacakan GNSS live kontinu dihentikan.');
+      return;
+    }
+    gnssControllerRef.current?.cancel();
+    gnssControllerRef.current = null;
+    setGnssLoading(false);
+    setGnssProgress(null);
+    setGnssStatusNote('Mengaktifkan pelacakan GNSS internal secara kontinu...');
+    setLiveGnssActive(true);
+    liveStopRef.current = startLiveGnssWatcher(
+      (fix) => {
+        setGnssFix(fix);
+        setGnssStatusNote(fix.accuracyMessage);
+      },
+      (err) => {
+        setGnssStatusNote(err.message);
+      },
+      activeMaxAccuracyM
+    );
+  };
+
+  // Internal Phone GNSS Capture Handler
+  const handleCaptureGnss = async (
+    overrideMode?: GnssCaptureMode
+  ): Promise<GnssFixResult | null> => {
+    const activeMode = overrideMode ?? gnssMode;
+    const modeThreshold =
+      activeGnssSetting.modeThresholds?.[activeMode] ??
+      activeGnssSetting.defaultMaxAccuracyM ??
+      MAX_GNSS_ACCURACY_M;
+    if (activeMode === 'continuous') {
+      if (!liveGnssActive) {
+        startOrToggleLiveGnss();
+      }
+      if (gnssFix && Date.now() - gnssFix.capturedAt <= 8000) {
+        return gnssFix;
+      }
+    }
+
+    gnssControllerRef.current?.cancel();
+    setGnssLoading(true);
+    setGnssProgress(null);
+    setGnssStatusNote(null);
+
+    const captureMode: GnssCaptureMode =
+      activeMode === 'continuous' ? 'optimal' : activeMode;
+    const controller = startInternalGnssCapture(
+      captureMode,
+      (progress) => {
+        setGnssProgress(progress);
+        if (progress.currentEstimate) {
+          setGnssFix(progress.currentEstimate);
+        }
+      },
+      modeThreshold
+    );
+    gnssControllerRef.current = controller;
+
+    try {
+      const fix = await controller.promise;
       setGnssFix(fix);
       setGnssStatusNote(fix.accuracyMessage);
       return fix;
     } catch (err) {
       const msg =
-        err instanceof Error ? err.message : 'Gagal membaca posisi GNSS.';
+        err instanceof Error ? err.message : 'Gagal membaca posisi GNSS HP.';
       setGnssStatusNote(msg);
       return null;
     } finally {
+      if (gnssControllerRef.current === controller) {
+        gnssControllerRef.current = null;
+      }
       setGnssLoading(false);
+      setGnssProgress(null);
     }
-  };
-
-  const handleReadSerialGnss = async () => {
-    setGnssLoading(true);
-    setGnssStatusNote(null);
-    try {
-      const fix = await readNmeaFromWebSerial();
-      setGnssFix(fix);
-      setGnssStatusNote(fix.accuracyMessage);
-    } catch (err) {
-      setGnssStatusNote(
-        err instanceof Error ? err.message : 'Gagal membaca port serial GNSS.'
-      );
-    } finally {
-      setGnssLoading(false);
-    }
-  };
-
-  const handleParseManualNmea = () => {
-    const parsed = parseNmeaGgaSentence(nmeaInputText);
-    if (!parsed) {
-      setGnssStatusNote(
-        'Format kalimat NMEA $GPGGA/$GNGGA tidak dikenali. Pastikan menyalin baris GGA lengkap.'
-      );
-      return;
-    }
-    setGnssFix(parsed);
-    setGnssStatusNote(parsed.accuracyMessage);
-    setNmeaModalOpen(false);
-    setNmeaInputText('');
   };
 
   // Photo upload & compression handlers
@@ -639,7 +740,8 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
     tinggiCm: number,
     diameterMm: number,
     extremeConfirmed: boolean,
-    resolvedFix: GnssFixResult | null
+    resolvedFix: GnssFixResult | null,
+    gnssOverrideReason: string | null = null
   ) => {
     if (!parsedNomorTanaman) return;
     setSaving(true);
@@ -715,6 +817,9 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
         horizontalAccuracyM: resolvedFix?.horizontalAccuracyM ?? null,
         verticalAccuracyM: resolvedFix?.verticalAccuracyM ?? null,
         gnssSource: resolvedFix?.gnssSource ?? null,
+        gnssOverrideReason: gnssOverrideReason
+          ? gnssOverrideReason.trim().slice(0, 250)
+          : null,
         coordCrs: crsCode,
         photoDataUrl: plantPhotoUrl,
       });
@@ -759,47 +864,51 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
     let currentFix = gnssFix;
     let gnssErr: string | null = null;
 
-    // Automatically read live GNSS point when submitting an entry
-    try {
-      const fresh = await captureBrowserGnssPoint(8000);
-      currentFix = fresh;
-      setGnssFix(fresh);
-      setGnssStatusNote(fresh.accuracyMessage);
-    } catch (err) {
-      gnssErr = err instanceof Error ? err.message : 'GNSS tidak terjangkau.';
-      if (!currentFix) {
-        setGnssStatusNote(gnssErr);
+    // Automatically lock live internal phone GNSS point on submit
+    if (
+      gnssMode === 'continuous' &&
+      liveGnssActive &&
+      currentFix &&
+      Date.now() - currentFix.capturedAt <= 6000 &&
+      currentFix.horizontalAccuracyM !== null &&
+      currentFix.horizontalAccuracyM <= activeMaxAccuracyM
+    ) {
+      // Fresh hot-fix already locked within policy threshold from continuous watcher
+    } else {
+      const fresh = await handleCaptureGnss();
+      if (fresh) {
+        currentFix = fresh;
+      } else if (!currentFix) {
+        gnssErr =
+          'Sinyal satelit GNSS HP belum terkunci. Pastikan GPS perangkat aktif di luar ruangan.';
       }
     }
 
-    if (requireStrict3m) {
-      if (!currentFix) {
-        setSaving(false);
-        setGnssOverrideModal({
-          tinggiCm,
-          diameterMm,
-          extremeConfirmed,
-          fix: null,
-          reason:
-            gnssErr ||
-            'Titik GNSS belum terkunci. Pastikan GPS/GNSS eksternal aktif atau lanjutkan simpan jika sedang di dalam ruangan.',
-        });
-        return;
-      }
-      if (!currentFix.lockedWithin3m) {
-        setSaving(false);
-        setGnssOverrideModal({
-          tinggiCm,
-          diameterMm,
-          extremeConfirmed,
-          fix: currentFix,
-          reason: `Akurasi GNSS saat ini (${currentFix.accuracyMessage}) masih melebihi batas kunci <= ${MAX_GNSS_ACCURACY_M} meter.`,
-        });
-        return;
-      }
+    const fixPassesThreshold = Boolean(
+      currentFix &&
+        currentFix.horizontalAccuracyM !== null &&
+        currentFix.horizontalAccuracyM <= activeMaxAccuracyM
+    );
+
+    if (isGnssPolicyEnforced && !fixPassesThreshold) {
+      setSaving(false);
+      setGnssOverrideModal({
+        tinggiCm,
+        diameterMm,
+        extremeConfirmed,
+        fix: currentFix,
+        summaryReason: !currentFix
+          ? gnssErr ||
+            `Titik GNSS internal HP belum terkunci (batas wajib ${perusahaan}: <= ${activeMaxAccuracyM} m). Anda wajib mengisi alasan lapangan jika ingin tetap menyimpan.`
+          : `Akurasi GNSS internal HP saat ini (±${currentFix.horizontalAccuracyM} m) masih di atas batas wajib ${perusahaan} mode ${
+              GNSS_CAPTURE_MODES.find((m) => m.id === gnssMode)?.shortLabel || gnssMode
+            } (<= ${activeMaxAccuracyM} m).`,
+        overrideReasonText: '',
+      });
+      return;
     }
 
-    await finalizePlantSave(tinggiCm, diameterMm, extremeConfirmed, currentFix);
+    await finalizePlantSave(tinggiCm, diameterMm, extremeConfirmed, currentFix, null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -953,11 +1062,11 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
         <form
           onSubmit={handleSubmit}
-          className="xl:col-span-8 bg-white border border-stone-200 rounded-2xl p-4 sm:p-6 space-y-6"
+          className="xl:col-span-8 min-w-0 bg-white border border-stone-200 rounded-2xl p-4 sm:p-6 space-y-6"
         >
           {/* Section 0: Pilih Perusahaan */}
           <div className="space-y-2.5 pb-5 border-b border-stone-200/70">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <label className="text-xs font-semibold text-stone-800 flex items-center gap-1.5">
                 <Building2 className="w-3.5 h-3.5 text-[#14532D]" />
                 Perusahaan Operasional
@@ -985,7 +1094,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                     type="button"
                     disabled={isCompanyLocked && !active}
                     onClick={() => handleSelectCompany(comp)}
-                    className={`min-h-[46px] px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-all active:scale-[0.98] ${
+                    className={`min-h-[46px] px-2 sm:px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-all active:scale-[0.98] truncate ${
                       active
                         ? 'bg-[#14532D] text-white border-[#14532D]'
                         : 'bg-white text-stone-800 border-stone-300 hover:bg-[#F6F7F4]'
@@ -1029,7 +1138,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                 placeholder="Nama lengkap petugas"
                 maxLength={100}
                 required
-                className="w-full min-h-[46px] rounded-xl border border-stone-300 bg-white px-3.5 text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+                className="w-full min-h-[46px] rounded-xl border border-stone-300 bg-white px-3.5 text-base sm:text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
               />
             </div>
 
@@ -1045,7 +1154,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                 placeholder={`Pilih lokasi ${perusahaan} atau ketik lokasi baru (misal: Blok A-1)`}
                 maxLength={100}
                 required
-                className="w-full min-h-[46px] rounded-xl border border-stone-300 bg-white px-3.5 text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+                className="w-full min-h-[46px] rounded-xl border border-stone-300 bg-white px-3.5 text-base sm:text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
               />
               <datalist id="locations-master-list">
                 {companyLocations.map((loc) => (
@@ -1182,7 +1291,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                             )
                           }
                           placeholder="Contoh: 3"
-                          className="w-full min-h-[44px] rounded-xl border border-stone-300 bg-white px-3.5 text-sm font-mono tabular-nums text-[#141A15] focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+                          className="w-full min-h-[44px] rounded-xl border border-stone-300 bg-white px-3.5 text-base sm:text-sm font-mono tabular-nums text-[#141A15] focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
                         />
                       </div>
                     )}
@@ -1264,7 +1373,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                   placeholder="Contoh: P-01 atau Petak 1"
                   maxLength={50}
                   required
-                  className="w-full min-h-[46px] rounded-xl border border-stone-300 bg-white px-3.5 text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+                  className="w-full min-h-[46px] rounded-xl border border-stone-300 bg-white px-3.5 text-base sm:text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
                 />
                 <datalist id="petaks-master-list">
                   {knownPetaksInLocation.map((pt) => (
@@ -1304,7 +1413,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                       setManualNomorEdited(false);
                       setNomorTanamanRaw(String(suggestedPlantNumber));
                     }}
-                    className="text-xs font-semibold text-[#14532D] hover:underline flex items-center gap-1"
+                    className="text-xs font-semibold text-[#14532D] hover:underline flex items-center gap-1 shrink-0"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
                     Urut #{suggestedPlantNumber}
@@ -1324,7 +1433,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                     : 'Isi Lokasi & Nomor Petak terlebih dahulu'
                 }
                 required
-                className={`w-full min-h-[46px] rounded-xl border px-3.5 text-sm font-mono tabular-nums focus:outline-none focus:ring-2 ${
+                className={`w-full min-h-[46px] rounded-xl border px-3.5 text-base sm:text-sm font-mono tabular-nums focus:outline-none focus:ring-2 ${
                   duplicateCheck.isDuplicate
                     ? 'border-red-500 bg-red-50 text-red-900 focus:ring-red-500/30'
                     : 'border-stone-300 bg-white text-[#141A15] focus:ring-[#14532D]/25 focus:border-[#14532D]'
@@ -1428,11 +1537,11 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
               <label className="block text-xs font-semibold text-stone-800">
                 Kelompok & Jenis Tanaman ({perusahaan})
               </label>
-              <div className="inline-flex p-1 bg-[#F6F7F4] border border-stone-200 rounded-xl self-start">
+              <div className="grid grid-cols-2 sm:inline-flex p-1 bg-[#F6F7F4] border border-stone-200 rounded-xl w-full sm:w-auto">
                 <button
                   type="button"
                   onClick={() => handleGroupSwitch('FGS')}
-                  className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                  className={`min-h-[40px] sm:min-h-[38px] px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap text-center ${
                     kelompokTanaman === 'FGS'
                       ? 'bg-[#14532D] text-white'
                       : 'text-stone-700 hover:text-[#141A15]'
@@ -1443,7 +1552,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                 <button
                   type="button"
                   onClick={() => handleGroupSwitch('LOKAL_MPTS')}
-                  className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                  className={`min-h-[40px] sm:min-h-[38px] px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap text-center ${
                     kelompokTanaman === 'LOKAL_MPTS'
                       ? 'bg-[#14532D] text-white'
                       : 'text-stone-700 hover:text-[#141A15]'
@@ -1454,7 +1563,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 2xl:grid-cols-5 gap-2">
               {activeSpeciesList.map((sp) => (
                 <button
                   key={sp}
@@ -1571,31 +1680,85 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
             </div>
           </div>
 
-          {/* Section 7: GNSS Otomatis (Trimble / Emlid <= 3m) & Foto Bukti Ringan (<= 150 KB) */}
-          <div className="rounded-xl border border-stone-200 bg-[#F6F7F4] p-4 space-y-3">
+          {/* Section 7: GNSS Internal Perangkat HP (Offline & Online) */}
+          <div className="rounded-xl border border-stone-200 bg-[#F6F7F4] p-4 space-y-3.5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs font-bold text-[#141A15]">
-                <Compass className="w-4 h-4 text-[#14532D]" />
+                <Satellite className="w-4 h-4 text-[#14532D] shrink-0" />
                 <span>
-                  Titik Koordinat GNSS Otomatis (Kunci Akurasi &lt;= {MAX_GNSS_ACCURACY_M} m)
+                  GNSS Internal Perangkat HP (Offline &amp; Online)
                 </span>
               </div>
-              <label className="inline-flex items-center gap-2 text-[11px] font-medium text-stone-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={requireStrict3m}
-                  onChange={(e) => setRequireStrict3m(e.target.checked)}
-                  className="rounded border-stone-300 text-[#14532D]"
-                />
-                Kunci wajib H &amp; V &lt;= 3m
-              </label>
+              <span
+                className={`inline-flex items-center gap-1.5 text-[11px] font-semibold ${
+                  isGnssPolicyEnforced ? 'text-[#14532D]' : 'text-stone-600'
+                }`}
+              >
+                {isGnssPolicyEnforced ? (
+                  <>
+                    <Lock className="w-3 h-3 shrink-0" />
+                    Wajib &lt;= {activeMaxAccuracyM} m (Alasan wajib jika &gt; {activeMaxAccuracyM} m)
+                  </>
+                ) : (
+                  <>Target disarankan &lt;= {activeMaxAccuracyM} m</>
+                )}
+              </span>
+            </div>
+
+            {/* Acquisition Mode Selector */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="font-semibold text-stone-700">
+                  Sistem Pengambilan GNSS HP
+                </span>
+                <span className="text-stone-500">
+                  {isOnline ? 'Online · A-GPS + Satelit' : 'Offline · Chip Satelit HP'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {GNSS_CAPTURE_MODES.map((m) => {
+                  const active = gnssMode === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setGnssMode(m.id)}
+                      className={`min-h-[42px] px-2.5 py-1.5 rounded-xl border text-left transition-all ${
+                        active
+                          ? 'bg-[#14532D] text-white border-[#14532D]'
+                          : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-50'
+                      }`}
+                    >
+                      <div className="text-xs font-semibold truncate">
+                        {m.shortLabel}
+                      </div>
+                      <div
+                        className={`text-[10px] truncate ${
+                          active ? 'text-emerald-100' : 'text-stone-500'
+                        }`}
+                      >
+                        {m.id === 'optimal'
+                          ? 'Multi-sampel terbaik'
+                          : m.id === 'precision_static'
+                          ? 'Bawah tajuk rapat'
+                          : m.id === 'continuous'
+                          ? 'Hot-fix berjalan'
+                          : '1x bacaan cepat'}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-stone-600 leading-relaxed">
+                {GNSS_CAPTURE_MODES.find((m) => m.id === gnssMode)?.description}
+              </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <select
                 value={crsCode}
                 onChange={(e) => setCrsCode(e.target.value as CoordCrsCode)}
-                className="min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-xs text-[#141A15]"
+                className="w-full min-h-[44px] sm:min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-base sm:text-xs text-[#141A15]"
                 aria-label="Sistem Referensi Koordinat"
               >
                 {CRS_OPTION_GROUPS.map((grp) => (
@@ -1613,7 +1776,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                 onChange={(e) =>
                   setCoordFormat(e.target.value as CoordFormatType)
                 }
-                className="min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-xs text-[#141A15]"
+                className="w-full min-h-[44px] sm:min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-base sm:text-xs text-[#141A15]"
                 aria-label="Format Koordinat"
               >
                 {COORD_FORMAT_OPTIONS.map((f) => (
@@ -1629,30 +1792,94 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                 type="button"
                 onClick={() => void handleCaptureGnss()}
                 disabled={gnssLoading}
-                className="min-h-[38px] px-3 py-1.5 rounded-lg bg-[#14532D] text-white text-xs font-semibold hover:bg-[#0F3F22] disabled:opacity-60 flex items-center gap-1.5"
+                className="min-h-[42px] sm:min-h-[38px] px-3.5 py-1.5 rounded-lg bg-[#14532D] text-white text-xs font-semibold hover:bg-[#0F3F22] disabled:opacity-60 flex items-center gap-1.5"
               >
                 <Compass className="w-3.5 h-3.5" />
-                {gnssLoading ? 'Mengunci GNSS...' : 'Ambil Titik GNSS Sekarang'}
+                {gnssLoading
+                  ? 'Mengunci Satelit HP...'
+                  : gnssMode === 'optimal'
+                  ? 'Kunci GNSS Optimal'
+                  : gnssMode === 'precision_static'
+                  ? 'Mulai Kunci Kanopi'
+                  : gnssMode === 'continuous'
+                  ? 'Ambil Titik dari Live'
+                  : 'Ambil Titik Cepat'}
               </button>
 
-              <button
-                type="button"
-                onClick={() => void handleReadSerialGnss()}
-                disabled={gnssLoading}
-                className="min-h-[38px] px-3 py-1.5 rounded-lg border border-stone-300 bg-white text-xs font-semibold text-stone-700 hover:bg-stone-50 flex items-center gap-1.5"
-              >
-                <Usb className="w-3.5 h-3.5 text-[#14532D]" />
-                Trimble / Emlid (Serial)
-              </button>
+              {gnssLoading && gnssProgress && gnssProgress.sampleCount >= 1 && (
+                <button
+                  type="button"
+                  onClick={() => gnssControllerRef.current?.finishEarly()}
+                  className="min-h-[42px] sm:min-h-[38px] px-3 py-1.5 rounded-lg border border-[#14532D] bg-white text-xs font-semibold text-[#14532D] hover:bg-[#E8F3EB]"
+                >
+                  Kunci Hasil Sekarang ({gnssProgress.sampleCount} sampel)
+                </button>
+              )}
 
-              <button
-                type="button"
-                onClick={() => setNmeaModalOpen(true)}
-                className="min-h-[38px] px-3 py-1.5 rounded-lg border border-stone-300 bg-white text-xs font-semibold text-stone-700 hover:bg-stone-50"
-              >
-                Tempel NMEA GGA
-              </button>
+              {gnssMode === 'continuous' && (
+                <button
+                  type="button"
+                  onClick={startOrToggleLiveGnss}
+                  className={`min-h-[42px] sm:min-h-[38px] px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                    liveGnssActive
+                      ? 'bg-emerald-50 border-[#14532D] text-[#14532D]'
+                      : 'bg-white border-stone-300 text-stone-700 hover:bg-stone-50'
+                  }`}
+                >
+                  <Radio className="w-3.5 h-3.5" />
+                  {liveGnssActive ? 'Live Aktif (Matikan)' : 'Aktifkan Live Kontinu'}
+                </button>
+              )}
+
+              {gnssMode !== 'continuous' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGnssMode('continuous');
+                    if (!liveGnssActive) {
+                      startOrToggleLiveGnss();
+                    }
+                  }}
+                  className="min-h-[42px] sm:min-h-[38px] px-3 py-1.5 rounded-lg border border-stone-300 bg-white text-xs font-semibold text-stone-700 hover:bg-stone-50 flex items-center gap-1.5"
+                >
+                  <Navigation className="w-3.5 h-3.5 text-[#14532D]" />
+                  Hot-Fix Berjalan
+                </button>
+              )}
             </div>
+
+            {/* Real-time GNSS Convergence Progress */}
+            {gnssLoading && gnssProgress && (
+              <div className="rounded-lg bg-white border border-stone-200 px-3 py-2.5 space-y-1.5 text-xs">
+                <div className="flex items-center justify-between gap-2 font-mono text-[11px] text-stone-700">
+                  <span>
+                    Sampel satelit: {gnssProgress.sampleCount}/
+                    {gnssProgress.targetSamples}
+                  </span>
+                  <span>
+                    {gnssProgress.bestAccuracyM !== null
+                      ? `Terbaik: ±${gnssProgress.bestAccuracyM} m`
+                      : 'Menunggu sinyal satelit...'}
+                  </span>
+                </div>
+                <div className="w-full h-1.5 rounded-full bg-stone-200 overflow-hidden">
+                  <div
+                    className="h-full bg-[#14532D] transition-all duration-300"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(
+                          12,
+                          (gnssProgress.sampleCount /
+                            Math.max(1, gnssProgress.targetSamples)) *
+                            100
+                        )
+                      )}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
 
             {gnssFix && (
               <div className="rounded-lg bg-white border border-stone-200 px-3 py-2 text-xs space-y-1">
@@ -1666,10 +1893,17 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                 </div>
                 <div
                   className={`text-[11px] font-medium ${
-                    gnssFix.lockedWithin3m ? 'text-[#14532D]' : 'text-amber-700'
+                    isFixWithinPolicy ? 'text-[#14532D]' : 'text-amber-700'
                   }`}
                 >
-                  {gnssFix.gnssSource} · {gnssFix.accuracyMessage}
+                  {gnssFix.gnssSource} ·{' '}
+                  {isFixWithinPolicy
+                    ? `Terkunci <= ${activeMaxAccuracyM}m (H: ±${gnssFix.horizontalAccuracyM ?? '?'}m${
+                        gnssFix.verticalAccuracyM !== null
+                          ? ` · V: ±${gnssFix.verticalAccuracyM}m`
+                          : ''
+                      })`
+                    : `Akurasi H: ±${gnssFix.horizontalAccuracyM ?? '?'}m (melebihi batas wajib <= ${activeMaxAccuracyM}m)`}
                   {gnssFix.altitudeM !== null
                     ? ` · Elevasi ${gnssFix.altitudeM} m`
                     : ''}
@@ -1747,7 +1981,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                 value={keterangan}
                 onChange={(e) => setKeterangan(e.target.value)}
                 placeholder="Catatan tambahan lapangan, serangan hama, sulaman, dll."
-                className="w-full rounded-xl border border-stone-300 bg-white px-3.5 py-2.5 text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+                className="w-full rounded-xl border border-stone-300 bg-white px-3.5 py-2.5 text-base sm:text-sm text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
               />
             </div>
           </div>
@@ -1785,7 +2019,7 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
         </form>
 
         {/* Side Column: Recent Entries */}
-        <div className="xl:col-span-4 bg-white border border-stone-200 rounded-2xl p-4 sm:p-5 space-y-4">
+        <div className="xl:col-span-4 min-w-0 bg-white border border-stone-200 rounded-2xl p-4 sm:p-5 space-y-4">
           <div className="flex items-center justify-between border-b border-stone-200/80 pb-3">
             <h2 className="text-sm font-bold text-[#141A15] font-display">
               Input Terbaru · {perusahaan}
@@ -1863,8 +2097,8 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
 
       {/* Extreme Value Confirmation Modal */}
       {extremeConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md bg-white border border-stone-200 rounded-2xl p-6 shadow-xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto bg-white border border-stone-200 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4 my-auto">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
                 <AlertTriangle className="w-5 h-5" />
@@ -1916,22 +2150,72 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
         </div>
       )}
 
-      {/* GNSS 3m Lock Warning Modal */}
+      {/* GNSS Mandatory Accuracy Gate & Override Reason Modal */}
       {gnssOverrideModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md bg-white border border-stone-200 rounded-2xl p-6 shadow-xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto bg-white border border-stone-200 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4 my-auto">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
                 <Compass className="w-5 h-5" />
               </div>
               <div className="space-y-1">
                 <h3 className="text-base font-bold text-[#141A15] font-display">
-                  Kunci Akurasi GNSS &lt;= {MAX_GNSS_ACCURACY_M} Meter
+                  Akurasi GNSS Melebihi Batas &lt;= {activeMaxAccuracyM} m
                 </h3>
                 <p className="text-xs text-stone-600 leading-relaxed">
-                  {gnssOverrideModal.reason}
+                  {gnssOverrideModal.summaryReason}
                 </p>
               </div>
+            </div>
+
+            <div className="rounded-xl bg-[#F6F7F4] border border-stone-200 p-3.5 space-y-2.5">
+              <label className="block text-xs font-semibold text-[#141A15]">
+                Alasan Wajib (Minimal 5 karakter untuk menyimpan titik di atas {activeMaxAccuracyM} m)
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  'Kanopi hutan sangat rapat',
+                  'Lembah / tebing tertutup',
+                  'Cuaca mendung / hujan tebal',
+                  'Sinyal GPS HP lambat stabil',
+                ].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() =>
+                      setGnssOverrideModal((prev) =>
+                        prev ? { ...prev, overrideReasonText: preset } : prev
+                      )
+                    }
+                    className={`min-h-[32px] px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors ${
+                      gnssOverrideModal.overrideReasonText === preset
+                        ? 'bg-[#14532D] text-white border-[#14532D]'
+                        : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-50'
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                rows={2}
+                maxLength={250}
+                value={gnssOverrideModal.overrideReasonText}
+                onChange={(e) =>
+                  setGnssOverrideModal((prev) =>
+                    prev
+                      ? { ...prev, overrideReasonText: e.target.value }
+                      : prev
+                  )
+                }
+                placeholder="Pilih cepat di atas atau tulis kondisi lapangan secara spesifik..."
+                className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-base sm:text-xs text-[#141A15] placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#14532D]/25 focus:border-[#14532D]"
+              />
+              {gnssOverrideModal.overrideReasonText.trim().length < 5 && (
+                <p className="text-[11px] text-amber-800">
+                  Isi alasan terlebih dahulu agar titik dapat disimpan dan tercatat untuk verifikasi Administrator.
+                </p>
+              )}
             </div>
 
             <div className="flex flex-col sm:flex-row gap-2.5">
@@ -1939,63 +2223,27 @@ export const PlantEntryForm: React.FC<PlantEntryFormProps> = ({ menuType }) => {
                 type="button"
                 onClick={() => {
                   setGnssOverrideModal(null);
-                  void handleCaptureGnss();
+                  void handleCaptureGnss('precision_static');
                 }}
                 className="flex-1 min-h-[44px] rounded-xl bg-[#14532D] text-xs font-semibold text-white hover:bg-[#0F3F22]"
               >
-                Coba Kunci Ulang GNSS
+                Kunci Ulang (Mode Kanopi)
               </button>
               <button
                 type="button"
+                disabled={gnssOverrideModal.overrideReasonText.trim().length < 5}
                 onClick={() =>
                   void finalizePlantSave(
                     gnssOverrideModal.tinggiCm,
                     gnssOverrideModal.diameterMm,
                     gnssOverrideModal.extremeConfirmed,
-                    gnssOverrideModal.fix
+                    gnssOverrideModal.fix,
+                    gnssOverrideModal.overrideReasonText.trim()
                   )
                 }
-                className="flex-1 min-h-[44px] rounded-xl border border-stone-300 bg-white text-xs font-semibold text-stone-700 hover:bg-[#F6F7F4]"
+                className="flex-1 min-h-[44px] rounded-xl border border-stone-300 bg-white text-xs font-semibold text-stone-800 hover:bg-[#F6F7F4] disabled:opacity-45 disabled:cursor-not-allowed"
               >
-                Simpan Tetap
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* NMEA GGA Paste Helper Modal */}
-      {nmeaModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md bg-white border border-stone-200 rounded-2xl p-6 shadow-xl space-y-4">
-            <h3 className="text-base font-bold text-[#141A15] font-display">
-              Tempel Kalimat NMEA GGA (Trimble / Emlid)
-            </h3>
-            <p className="text-xs text-stone-600">
-              Tempel output baris <code>$GPGGA</code> atau <code>$GNGGA</code>{' '}
-              dari aplikasi receiver GNSS Anda.
-            </p>
-            <textarea
-              rows={3}
-              value={nmeaInputText}
-              onChange={(e) => setNmeaInputText(e.target.value)}
-              placeholder="$GNGGA,092725.00,0114.12345,S,11632.56789,E,4,18,0.6,45.2,M,12.1,M,,*5C"
-              className="w-full rounded-xl border border-stone-300 p-3 text-xs font-mono"
-            />
-            <div className="flex gap-2.5">
-              <button
-                type="button"
-                onClick={() => setNmeaModalOpen(false)}
-                className="flex-1 min-h-[42px] rounded-xl border border-stone-300 text-xs font-semibold text-stone-700"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={handleParseManualNmea}
-                className="flex-1 min-h-[42px] rounded-xl bg-[#14532D] text-xs font-semibold text-white"
-              >
-                Terapkan Koordinat
+                Simpan dengan Alasan
               </button>
             </div>
           </div>

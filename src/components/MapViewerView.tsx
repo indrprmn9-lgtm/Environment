@@ -11,7 +11,9 @@ import {
   LocateFixed,
   Map as MapIcon,
   Maximize2,
+  Minus,
   Plus,
+  Radio,
   Tag,
   Trash2,
   Upload,
@@ -26,7 +28,11 @@ import {
   transformCrsToWgs84,
 } from '../lib/crsTransform';
 import { extractGeoPdfBoundsFromBuffer } from '../lib/geoPdf';
-import { captureBrowserGnssPoint, type GnssFixResult } from '../lib/gnss';
+import {
+  captureBrowserGnssPoint,
+  type GnssFixResult,
+  startLiveGnssWatcher,
+} from '../lib/gnss';
 import {
   type BaseMapFileType,
   type BaseMapLayer,
@@ -294,11 +300,13 @@ function computeRingCentroid(
   };
 }
 
-function getFeatureLabelAnchor(geom: SimpleGeometry): [number, number] | null {
+function getFeatureLabelAnchor(
+  geom: SimpleGeometry
+): { lon: number; lat: number; area: number } | null {
   if (geom.type === 'Point') {
     const c = geom.coordinates as number[];
     if (Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1])) {
-      return [c[0], c[1]];
+      return { lon: c[0], lat: c[1], area: 0 };
     }
     return null;
   }
@@ -310,7 +318,7 @@ function getFeatureLabelAnchor(geom: SimpleGeometry): [number, number] | null {
       Number.isFinite(first[0]) &&
       Number.isFinite(first[1])
     ) {
-      return [first[0], first[1]];
+      return { lon: first[0], lat: first[1], area: 0 };
     }
     return null;
   }
@@ -319,7 +327,7 @@ function getFeatureLabelAnchor(geom: SimpleGeometry): [number, number] | null {
     if (!Array.isArray(coords) || coords.length === 0) return null;
     const mid = coords[Math.floor(coords.length / 2)];
     if (Array.isArray(mid) && Number.isFinite(mid[0]) && Number.isFinite(mid[1])) {
-      return [mid[0], mid[1]];
+      return { lon: mid[0], lat: mid[1], area: 0 };
     }
     return null;
   }
@@ -335,7 +343,7 @@ function getFeatureLabelAnchor(geom: SimpleGeometry): [number, number] | null {
     if (!Array.isArray(longest) || longest.length === 0) return null;
     const mid = longest[Math.floor(longest.length / 2)];
     if (Array.isArray(mid) && Number.isFinite(mid[0]) && Number.isFinite(mid[1])) {
-      return [mid[0], mid[1]];
+      return { lon: mid[0], lat: mid[1], area: 0 };
     }
     return null;
   }
@@ -343,7 +351,7 @@ function getFeatureLabelAnchor(geom: SimpleGeometry): [number, number] | null {
     const rings = geom.coordinates as number[][][];
     if (!Array.isArray(rings) || rings.length === 0) return null;
     const c = computeRingCentroid(rings[0]);
-    return c ? [c.lon, c.lat] : null;
+    return c ? { lon: c.lon, lat: c.lat, area: c.bboxArea } : null;
   }
   if (geom.type === 'MultiPolygon') {
     const polys = geom.coordinates as number[][][][];
@@ -356,7 +364,7 @@ function getFeatureLabelAnchor(geom: SimpleGeometry): [number, number] | null {
         best = c;
       }
     }
-    return best ? [best.lon, best.lat] : null;
+    return best ? { lon: best.lon, lat: best.lat, area: best.bboxArea } : null;
   }
   return null;
 }
@@ -433,6 +441,8 @@ export const MapViewerView: React.FC = () => {
   // Live Officer GNSS location
   const [myLocation, setMyLocation] = useState<GnssFixResult | null>(null);
   const [locBusy, setLocBusy] = useState(false);
+  const [liveTrackActive, setLiveTrackActive] = useState(false);
+  const liveTrackStopRef = useRef<(() => void) | null>(null);
   const [locError, setLocError] = useState<string | null>(null);
 
   // Selected Point Inspector
@@ -471,9 +481,12 @@ export const MapViewerView: React.FC = () => {
   const [uploadInspectBusy, setUploadInspectBusy] = useState(false);
   const [mapNotice, setMapNotice] = useState<string | null>(null);
 
-  // Active layer label display state
+  // Active layer label display & typography sizing state
   const [layerLabelEnabled, setLayerLabelEnabled] = useState(false);
   const [layerLabelAttrs, setLayerLabelAttrs] = useState<string[]>([]);
+  const [layerLabelSize, setLayerLabelSize] = useState<number>(10);
+  const [layerLabelAvoidOverlap, setLayerLabelAvoidOverlap] =
+    useState<boolean>(true);
   const [savingLabels, setSavingLabels] = useState(false);
 
   // PDF Canvas & Stage refs
@@ -502,6 +515,63 @@ export const MapViewerView: React.FC = () => {
       setSelectedLayerId(companyLayers[0]?.id || 'NONE');
     }
   }, [companyLayers, selectedLayerId]);
+
+  // Load saved local label font size & anti-overlap preference per layer
+  useEffect(() => {
+    if (selectedLayerId === 'NONE') {
+      setLayerLabelSize(10);
+      setLayerLabelAvoidOverlap(true);
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(
+        `env_basemap_label_style_${selectedLayerId}`
+      );
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          fontSize?: number;
+          avoidOverlap?: boolean;
+        };
+        if (
+          typeof parsed.fontSize === 'number' &&
+          parsed.fontSize >= 5 &&
+          parsed.fontSize <= 22
+        ) {
+          setLayerLabelSize(parsed.fontSize);
+        }
+        if (typeof parsed.avoidOverlap === 'boolean') {
+          setLayerLabelAvoidOverlap(parsed.avoidOverlap);
+        }
+      } else {
+        setLayerLabelSize(10);
+        setLayerLabelAvoidOverlap(true);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, [selectedLayerId]);
+
+  useEffect(() => {
+    if (selectedLayerId === 'NONE') return;
+    try {
+      window.localStorage.setItem(
+        `env_basemap_label_style_${selectedLayerId}`,
+        JSON.stringify({
+          fontSize: layerLabelSize,
+          avoidOverlap: layerLabelAvoidOverlap,
+        })
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }, [selectedLayerId, layerLabelSize, layerLabelAvoidOverlap]);
+
+  // Cleanup live GNSS watcher on unmount
+  useEffect(() => {
+    return () => {
+      liveTrackStopRef.current?.();
+    };
+  }, []);
 
   // Fetch heavy base map payload on demand
   useEffect(() => {
@@ -808,18 +878,39 @@ export const MapViewerView: React.FC = () => {
     setLocError(null);
     setLocBusy(true);
     try {
-      const fix = await captureBrowserGnssPoint(12000);
+      const fix = await captureBrowserGnssPoint(15000, 'optimal');
       setMyLocation(fix);
       setMapNotice(
-        `Posisi saat ini terdeteksi (${fix.accuracyMessage}).`
+        `Posisi GNSS internal HP terdeteksi · ${fix.gnssSource} (${fix.accuracyMessage}).`
       );
     } catch (err) {
       setLocError(
-        err instanceof Error ? err.message : 'Gagal membaca posisi GNSS.'
+        err instanceof Error ? err.message : 'Gagal membaca posisi GNSS HP.'
       );
     } finally {
       setLocBusy(false);
     }
+  };
+
+  const handleToggleLiveTracking = () => {
+    if (liveTrackActive) {
+      liveTrackStopRef.current?.();
+      liveTrackStopRef.current = null;
+      setLiveTrackActive(false);
+      setMapNotice('Pelacakan lokasi live dihentikan.');
+      return;
+    }
+    setLocError(null);
+    setLiveTrackActive(true);
+    setMapNotice('Pelacakan GPS internal HP aktif secara kontinu (berfungsi offline & online).');
+    liveTrackStopRef.current = startLiveGnssWatcher(
+      (fix) => {
+        setMyLocation(fix);
+      },
+      (err) => {
+        setLocError(err.message);
+      }
+    );
   };
 
   const handleSelectUploadFile = async (file: File | null) => {
@@ -1091,11 +1182,14 @@ export const MapViewerView: React.FC = () => {
   const renderGeoJsonSvgFeatures = () => {
     if (!parsedVectorLayer) return null;
     const paths: React.ReactNode[] = [];
-    const labels: React.ReactNode[] = [];
     const showLabels = layerLabelEnabled && layerLabelAttrs.length > 0;
-    const totalFeatures = parsedVectorLayer.features.length;
-    const placedLabelPoints: Array<{ x: number; y: number }> = [];
-    const minSpacing = zoom < 1.8 && totalFeatures > 35 ? 34 / Math.sqrt(zoom) : 0;
+    const candidateLabels: Array<{
+      idx: number;
+      lx: number;
+      ly: number;
+      area: number;
+      text: string;
+    }> = [];
 
     parsedVectorLayer.features.forEach((feat, idx) => {
       const geom = feat.geometry;
@@ -1189,44 +1283,82 @@ export const MapViewerView: React.FC = () => {
         if (rawText) {
           const anchor = getFeatureLabelAnchor(geom);
           if (anchor) {
-            const [lx, ly] = projectPoint.toSvg(anchor[0], anchor[1]);
-            const tooClose =
-              minSpacing > 0 &&
-              placedLabelPoints.some(
-                (p) => Math.hypot(p.x - lx, p.y - ly) < minSpacing
-              );
-            if (!tooClose) {
-              if (minSpacing > 0) {
-                placedLabelPoints.push({ x: lx, y: ly });
-              }
-              const displayText =
-                rawText.length > 42 ? `${rawText.slice(0, 41)}…` : rawText;
-              const isPoint = geom.type === 'Point' || geom.type === 'MultiPoint';
-              labels.push(
-                <text
-                  key={`lbl-${idx}`}
-                  x={lx}
-                  y={isPoint ? ly - 7 / Math.sqrt(zoom) : ly}
-                  fontSize={10.5 / Math.sqrt(zoom)}
-                  fontWeight="700"
-                  fontFamily="sans-serif"
-                  fill="#0F3F22"
-                  stroke="#FFFFFF"
-                  strokeWidth={3.2 / Math.sqrt(zoom)}
-                  strokeLinejoin="round"
-                  paintOrder="stroke"
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                  pointerEvents="none"
-                >
-                  {displayText}
-                </text>
-              );
-            }
+            const [lx, rawLy] = projectPoint.toSvg(anchor.lon, anchor.lat);
+            const isPoint = geom.type === 'Point' || geom.type === 'MultiPoint';
+            const ly = isPoint ? rawLy - 7 / Math.sqrt(zoom) : rawLy;
+            const displayText =
+              rawText.length > 42 ? `${rawText.slice(0, 41)}…` : rawText;
+            candidateLabels.push({
+              idx,
+              lx,
+              ly,
+              area: anchor.area,
+              text: displayText,
+            });
           }
         }
       }
     });
+
+    const labels: React.ReactNode[] = [];
+    if (candidateLabels.length > 0) {
+      // Prioritize larger polygons/features so major blok/petak labels win if crowded
+      const ordered = [...candidateLabels].sort((a, b) => b.area - a.area);
+      const effectiveFontSize = layerLabelSize / Math.sqrt(zoom);
+      const strokeHalo = Math.max(1.2, (layerLabelSize * 0.3) / Math.sqrt(zoom));
+      const placedBoxes: Array<{
+        minX: number;
+        maxX: number;
+        minY: number;
+        maxY: number;
+      }> = [];
+
+      for (const item of ordered) {
+        const boxW =
+          Math.max(item.text.length, 2) * effectiveFontSize * 0.62 +
+          6 / Math.sqrt(zoom);
+        const boxH = effectiveFontSize * 1.35 + 4 / Math.sqrt(zoom);
+        const box = {
+          minX: item.lx - boxW / 2,
+          maxX: item.lx + boxW / 2,
+          minY: item.ly - boxH / 2,
+          maxY: item.ly + boxH / 2,
+        };
+
+        if (layerLabelAvoidOverlap) {
+          const overlaps = placedBoxes.some(
+            (b) =>
+              box.minX < b.maxX &&
+              box.maxX > b.minX &&
+              box.minY < b.maxY &&
+              box.maxY > b.minY
+          );
+          if (overlaps) continue;
+          placedBoxes.push(box);
+        }
+
+        labels.push(
+          <text
+            key={`lbl-${item.idx}`}
+            x={item.lx}
+            y={item.ly}
+            fontSize={effectiveFontSize}
+            fontWeight="700"
+            fontFamily="sans-serif"
+            fill="#0F3F22"
+            stroke="#FFFFFF"
+            strokeWidth={strokeHalo}
+            strokeLinejoin="round"
+            paintOrder="stroke"
+            textAnchor="middle"
+            dominantBaseline="central"
+            pointerEvents="none"
+          >
+            {item.text}
+          </text>
+        );
+      }
+    }
 
     return (
       <>
@@ -1260,7 +1392,20 @@ export const MapViewerView: React.FC = () => {
             className="min-h-[42px] px-4 py-2 rounded-xl bg-[#1D4ED8] text-white text-xs font-semibold hover:bg-[#1E40AF] disabled:opacity-60 flex items-center gap-2"
           >
             <LocateFixed className="w-4 h-4" />
-            {locBusy ? 'Mencari GNSS...' : 'Posisi Saya Saat Ini'}
+            {locBusy ? 'Mengunci GNSS HP...' : 'Posisi Saya Saat Ini'}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleToggleLiveTracking}
+            className={`min-h-[42px] px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+              liveTrackActive
+                ? 'bg-blue-50 border-[#1D4ED8] text-[#1D4ED8]'
+                : 'bg-white border-stone-300 text-stone-700 hover:bg-stone-50'
+            }`}
+          >
+            <Radio className="w-4 h-4" />
+            {liveTrackActive ? 'Live GPS Aktif' : 'Lacak Live'}
           </button>
 
           {isAdmin && (
@@ -1313,8 +1458,12 @@ export const MapViewerView: React.FC = () => {
 
       {/* Map Control Bar */}
       <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap gap-1 p-1 bg-[#F6F7F4] border border-stone-200/80 rounded-xl w-fit">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center justify-between gap-2">
+          <div
+            className={`grid gap-1 p-1 bg-[#F6F7F4] border border-stone-200/80 rounded-xl w-full sm:w-fit ${
+              lockedCompany ? 'grid-cols-1' : 'grid-cols-3 sm:flex sm:flex-wrap'
+            }`}
+          >
             {(lockedCompany ? ([lockedCompany] as const) : COMPANIES).map(
               (comp) => (
                 <button
@@ -1325,7 +1474,7 @@ export const MapViewerView: React.FC = () => {
                     setSelectedCompany(comp);
                     setSelectedPoint(null);
                   }}
-                  className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                  className={`min-h-[40px] sm:min-h-[38px] px-2 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap text-center truncate ${
                     selectedCompany === comp
                       ? 'bg-[#14532D] text-white'
                       : 'text-stone-600 hover:text-[#141A15]'
@@ -1337,10 +1486,10 @@ export const MapViewerView: React.FC = () => {
             )}
           </div>
 
-          <div className="flex flex-wrap gap-1 p-1 bg-[#F6F7F4] border border-stone-200/80 rounded-xl w-fit">
+          <div className="grid grid-cols-4 sm:flex sm:flex-wrap gap-1 p-1 bg-[#F6F7F4] border border-stone-200/80 rounded-xl w-full sm:w-fit">
             {(
               [
-                { id: 'ALL', label: 'Semua Kegiatan' },
+                { id: 'ALL', label: 'Semua' },
                 { id: 'SENSUS', label: 'Sensus' },
                 { id: 'MONITORING_IPPKH', label: 'IPPKH' },
                 { id: 'MONITORING_APL', label: 'APL' },
@@ -1353,7 +1502,7 @@ export const MapViewerView: React.FC = () => {
                   setActivityFilter(tab.id);
                   setSelectedPoint(null);
                 }}
-                className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                className={`min-h-[40px] sm:min-h-[38px] px-2 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap text-center ${
                   activityFilter === tab.id
                     ? 'bg-white text-[#141A15] border border-stone-200'
                     : 'text-stone-600 hover:text-[#141A15]'
@@ -1366,7 +1515,7 @@ export const MapViewerView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-          <div className="space-y-1">
+          <div className="space-y-1 min-w-0">
             <label className="font-semibold text-stone-700 flex items-center gap-1.5">
               <Layers className="w-3.5 h-3.5 text-stone-500" />
               Base Map ({selectedCompany})
@@ -1375,7 +1524,7 @@ export const MapViewerView: React.FC = () => {
               <select
                 value={selectedLayerId}
                 onChange={(e) => setSelectedLayerId(e.target.value)}
-                className="flex-1 min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-[#141A15]"
+                className="flex-1 min-w-0 min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs text-[#141A15]"
               >
                 <option value="NONE">
                   Grid Koordinat Standar (Tanpa Base Map)
@@ -1395,7 +1544,7 @@ export const MapViewerView: React.FC = () => {
                     setSelectedLayerId('NONE');
                     setMapNotice('Base map dihapus.');
                   }}
-                  className="min-h-[42px] min-w-[42px] rounded-xl border border-stone-300 text-stone-500 hover:bg-red-50 hover:text-red-700 flex items-center justify-center"
+                  className="min-h-[44px] min-w-[44px] sm:min-h-[42px] sm:min-w-[42px] rounded-xl border border-stone-300 text-stone-500 hover:bg-red-50 hover:text-red-700 flex items-center justify-center shrink-0"
                   title="Hapus Base Map terpilih"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -1404,7 +1553,7 @@ export const MapViewerView: React.FC = () => {
             </div>
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-1 min-w-0">
             <label className="font-semibold text-stone-700 flex items-center gap-1.5">
               <Compass className="w-3.5 h-3.5 text-stone-500" />
               Coordinate Reference System (CRS)
@@ -1412,7 +1561,7 @@ export const MapViewerView: React.FC = () => {
             <select
               value={displayCrs}
               onChange={(e) => setDisplayCrs(e.target.value as CoordCrsCode)}
-              className="w-full min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-[#141A15] font-mono"
+              className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs text-[#141A15] font-mono"
             >
               {CRS_OPTION_GROUPS.map((grp) => (
                 <optgroup key={grp.label} label={grp.label}>
@@ -1426,7 +1575,7 @@ export const MapViewerView: React.FC = () => {
             </select>
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-1 min-w-0">
             <label className="font-semibold text-stone-700 flex items-center gap-1.5">
               <Crosshair className="w-3.5 h-3.5 text-stone-500" />
               Type of Coordinate
@@ -1436,7 +1585,7 @@ export const MapViewerView: React.FC = () => {
               onChange={(e) =>
                 setCoordFormat(e.target.value as CoordFormatType)
               }
-              className="w-full min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-[#141A15]"
+              className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs text-[#141A15]"
             >
               {COORD_FORMAT_OPTIONS.map((f) => (
                 <option key={f.id} value={f.id}>
@@ -1572,6 +1721,95 @@ export const MapViewerView: React.FC = () => {
                   );
                 })}
               </div>
+
+              {/* Label Size & Anti-Overlap Adjustment Bar */}
+              {layerLabelEnabled && layerLabelAttrs.length > 0 && (
+                <div className="pt-2.5 mt-1 border-t border-stone-200/70 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] font-semibold text-stone-700 whitespace-nowrap">
+                      Ukuran Label:
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLayerLabelSize((s) =>
+                            Math.max(5, Number((s - 1).toFixed(1)))
+                          )
+                        }
+                        className="min-h-[34px] min-w-[34px] rounded-lg border border-stone-300 bg-white flex items-center justify-center text-stone-700 hover:bg-stone-50"
+                        aria-label="Perkecil ukuran label"
+                        title="Perkecil Label"
+                      >
+                        <Minus className="w-3.5 h-3.5" />
+                      </button>
+                      <input
+                        type="range"
+                        min={5}
+                        max={20}
+                        step={0.5}
+                        value={layerLabelSize}
+                        onChange={(e) =>
+                          setLayerLabelSize(Number(e.target.value))
+                        }
+                        aria-label="Geser ukuran label peta"
+                        className="w-28 sm:w-36 accent-[#14532D] cursor-pointer"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLayerLabelSize((s) =>
+                            Math.min(20, Number((s + 1).toFixed(1)))
+                          )
+                        }
+                        className="min-h-[34px] min-w-[34px] rounded-lg border border-stone-300 bg-white flex items-center justify-center text-stone-700 hover:bg-stone-50"
+                        aria-label="Perbesar ukuran label"
+                        title="Perbesar Label"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="text-[11px] font-mono tabular-nums font-semibold text-[#14532D] min-w-[42px] text-center">
+                        {layerLabelSize} px
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      {(
+                        [
+                          { label: 'Kecil', size: 7 },
+                          { label: 'Sedang', size: 10 },
+                          { label: 'Besar', size: 14 },
+                        ] as const
+                      ).map((preset) => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() => setLayerLabelSize(preset.size)}
+                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-medium transition-colors ${
+                            Math.abs(layerLabelSize - preset.size) < 0.6
+                              ? 'bg-[#14532D] text-white border-[#14532D]'
+                              : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-50'
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <label className="inline-flex items-center gap-2 text-[11px] font-medium text-stone-700 cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={layerLabelAvoidOverlap}
+                      onChange={(e) =>
+                        setLayerLabelAvoidOverlap(e.target.checked)
+                      }
+                      className="rounded border-stone-300 text-[#14532D]"
+                    />
+                    <span>Cegah label tumpang tindih (otomatis rapi)</span>
+                  </label>
+                </div>
+              )}
             </div>
           )}
       </div>
@@ -1580,14 +1818,14 @@ export const MapViewerView: React.FC = () => {
       <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden">
         <div
           ref={stageRef}
-          className="relative h-[480px] sm:h-[560px] bg-[#F2F4EF] select-none overflow-hidden touch-none"
+          className="relative h-[54dvh] min-h-[340px] max-h-[680px] lg:h-[600px] xl:h-[640px] bg-[#F2F4EF] select-none overflow-hidden touch-none"
         >
           {/* Zoom Toolbar */}
-          <div className="absolute top-3 right-3 z-20 flex flex-col gap-1.5 bg-white/95 border border-stone-200 rounded-xl p-1.5 shadow-sm">
+          <div className="absolute top-2.5 right-2.5 sm:top-3 sm:right-3 z-20 flex flex-col gap-1 bg-white/95 border border-stone-200 rounded-xl p-1 sm:p-1.5 shadow-sm">
             <button
               type="button"
               onClick={() => setZoom((z) => Math.min(12, Number((z * 1.35).toFixed(2))))}
-              className="w-9 h-9 rounded-lg hover:bg-stone-100 flex items-center justify-center text-[#141A15]"
+              className="w-10 h-10 sm:w-9 sm:h-9 rounded-lg hover:bg-stone-100 flex items-center justify-center text-[#141A15]"
               title="Zoom In"
             >
               <ZoomIn className="w-4 h-4" />
@@ -1595,7 +1833,7 @@ export const MapViewerView: React.FC = () => {
             <button
               type="button"
               onClick={() => setZoom((z) => Math.max(0.5, Number((z / 1.35).toFixed(2))))}
-              className="w-9 h-9 rounded-lg hover:bg-stone-100 flex items-center justify-center text-[#141A15]"
+              className="w-10 h-10 sm:w-9 sm:h-9 rounded-lg hover:bg-stone-100 flex items-center justify-center text-[#141A15]"
               title="Zoom Out"
             >
               <ZoomOut className="w-4 h-4" />
@@ -1606,7 +1844,7 @@ export const MapViewerView: React.FC = () => {
                 setZoom(1);
                 setPan({ x: 0, y: 0 });
               }}
-              className="w-9 h-9 rounded-lg hover:bg-stone-100 flex items-center justify-center text-stone-700"
+              className="w-10 h-10 sm:w-9 sm:h-9 rounded-lg hover:bg-stone-100 flex items-center justify-center text-stone-700"
               title="Reset Tampilan"
             >
               <Maximize2 className="w-4 h-4" />
@@ -1617,32 +1855,34 @@ export const MapViewerView: React.FC = () => {
           </div>
 
           {/* Floating Legend */}
-          <div className="absolute top-3 left-3 z-20 bg-white/95 border border-stone-200 rounded-xl px-3 py-2 text-[11px] space-y-1 shadow-sm max-w-[230px]">
+          <div className="absolute top-2.5 left-2.5 sm:top-3 sm:left-3 z-20 bg-white/95 border border-stone-200 rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-[11px] space-y-1 shadow-sm max-w-[168px] sm:max-w-[230px]">
             <div className="font-bold text-[#141A15] flex items-center justify-between gap-2">
-              <span>Legenda Titik ({geoPoints.length})</span>
+              <span className="truncate">Titik ({geoPoints.length})</span>
             </div>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-stone-700">
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#14532D] inline-block" />
+            <div className="grid grid-cols-2 gap-x-2 sm:gap-x-3 gap-y-0.5 sm:gap-y-1 text-stone-700">
+              <span className="flex items-center gap-1 sm:gap-1.5">
+                <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-[#14532D] inline-block shrink-0" />
                 Sensus
               </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#B45309] inline-block" />
+              <span className="flex items-center gap-1 sm:gap-1.5">
+                <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-[#B45309] inline-block shrink-0" />
                 IPPKH
               </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#0369A1] inline-block" />
+              <span className="flex items-center gap-1 sm:gap-1.5">
+                <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-[#0369A1] inline-block shrink-0" />
                 APL
               </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#DC2626] inline-block" />
+              <span className="flex items-center gap-1 sm:gap-1.5">
+                <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-[#DC2626] inline-block shrink-0" />
                 Mati
               </span>
             </div>
             {myLocation && (
-              <div className="pt-1 border-t border-stone-100 flex items-center gap-1.5 text-[#1D4ED8] font-semibold">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#1D4ED8] inline-block" />
-                Posisi Saya (±{myLocation.horizontalAccuracyM ?? '?'}m)
+              <div className="pt-1 border-t border-stone-100 flex items-center gap-1 text-[#1D4ED8] font-semibold truncate">
+                <span className="w-2 h-2 rounded-full bg-[#1D4ED8] inline-block shrink-0" />
+                <span className="truncate">
+                  Saya (±{myLocation.horizontalAccuracyM ?? '?'}m)
+                </span>
               </div>
             )}
           </div>
@@ -1923,9 +2163,9 @@ export const MapViewerView: React.FC = () => {
             </div>
           </div>
 
-          {/* Floating Selected Point Inspector */}
+          {/* Floating Selected Point Inspector (Desktop/Tablet) */}
           {selectedPoint && (
-            <div className="absolute bottom-3 left-3 z-20 w-[calc(100%-24px)] sm:w-80 bg-white border border-stone-200 rounded-xl p-3.5 shadow-lg text-xs space-y-2">
+            <div className="hidden sm:block absolute bottom-3 left-3 z-20 w-80 bg-white border border-stone-200 rounded-xl p-3.5 shadow-lg text-xs space-y-2">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="font-bold text-[#141A15]">
@@ -2006,6 +2246,84 @@ export const MapViewerView: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Mobile Selected Point Inspector (Docked below canvas so map stays clear) */}
+        {selectedPoint && (
+          <div className="sm:hidden border-t border-stone-200 bg-white p-3.5 text-xs space-y-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-bold text-[#141A15]">
+                  #{selectedPoint.nomorTanaman} · {selectedPoint.jenisTanaman}
+                </div>
+                <div className="text-[11px] text-stone-500">
+                  {selectedPoint.perusahaan} ·{' '}
+                  {getMenuLabel(selectedPoint.menuType)}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedPoint(null)}
+                className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100 shrink-0"
+                aria-label="Tutup detail titik"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5 text-[11px] text-stone-700">
+              <div>
+                Lokasi:{' '}
+                <span className="font-semibold">{selectedPoint.lokasi}</span>
+              </div>
+              <div>
+                Kondisi:{' '}
+                <span className="font-semibold">
+                  {selectedPoint.kondisiTanaman}
+                </span>
+              </div>
+              {selectedPoint.menuType !== 'SENSUS' && (
+                <div>
+                  Petak:{' '}
+                  <span className="font-semibold">
+                    {selectedPoint.nomorPetak || '-'}
+                  </span>
+                </div>
+              )}
+              <div>
+                Dimensi:{' '}
+                <span className="font-mono">
+                  {selectedPoint.kondisiTanaman === 'Mati'
+                    ? '-'
+                    : `${selectedPoint.tinggiCm}cm / ${selectedPoint.diameterMm}mm`}
+                </span>
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-[#F6F7F4] border border-stone-200 px-2.5 py-2 space-y-0.5">
+              <div className="font-mono text-[11px] text-[#141A15] break-all">
+                {formatCoordinatePair(
+                  selectedPoint.longitude,
+                  selectedPoint.latitude,
+                  displayCrs,
+                  coordFormat
+                )}
+              </div>
+              <div className="text-[10px] text-stone-500">
+                Akurasi H: ±{selectedPoint.horizontalAccuracyM ?? '?'}m · V: ±
+                {selectedPoint.verticalAccuracyM ?? '?'}m ·{' '}
+                {selectedPoint.namaPetugas}
+              </div>
+            </div>
+
+            {selectedPoint.photoDataUrl && (
+              <img
+                src={selectedPoint.photoDataUrl}
+                alt={`Foto tanaman #${selectedPoint.nomorTanaman}`}
+                className="w-full h-36 object-cover rounded-lg border border-stone-200"
+              />
+            )}
+          </div>
+        )}
 
         {/* Bottom Coordinate & Status Bar */}
         <div className="border-t border-stone-200 bg-[#F6F7F4] px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
@@ -2115,14 +2433,14 @@ export const MapViewerView: React.FC = () => {
 
       {/* Admin Upload Base Map Modal */}
       {showUploadModal && isAdmin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/55 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto">
           <form
             onSubmit={handleUploadSubmit}
-            className="w-full max-w-lg bg-white border border-stone-200 rounded-2xl p-6 shadow-xl space-y-4 my-auto"
+            className="w-full max-w-lg max-h-[90dvh] overflow-y-auto bg-white border border-stone-200 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4 my-auto"
           >
             <div className="flex items-center justify-between border-b border-stone-200/80 pb-3">
               <div className="flex items-center gap-2">
-                <Plus className="w-4 h-4 text-[#14532D]" />
+                <Plus className="w-4 h-4 text-[#14532D] shrink-0" />
                 <h3 className="text-base font-bold text-[#141A15] font-display">
                   Tambah Base Map Lapangan (PDF / Shapefile)
                 </h3>
@@ -2130,7 +2448,7 @@ export const MapViewerView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowUploadModal(false)}
-                className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100"
+                className="min-h-[44px] min-w-[44px] sm:min-h-[36px] sm:min-w-[36px] flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100 shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -2146,7 +2464,7 @@ export const MapViewerView: React.FC = () => {
                   onChange={(e) =>
                     setUploadCompany(e.target.value as CompanyName)
                   }
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 font-semibold"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs font-semibold"
                 >
                   {COMPANIES.map((comp) => (
                     <option key={comp} value={comp}>
@@ -2171,7 +2489,7 @@ export const MapViewerView: React.FC = () => {
                     setUploadDetectedAttrs([]);
                     setUploadFeatureCount(0);
                   }}
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 bg-white px-3"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs"
                 >
                   <option value="shapefile">Shapefile (.zip)</option>
                   <option value="geojson">GeoJSON (.geojson / .json)</option>
@@ -2189,7 +2507,7 @@ export const MapViewerView: React.FC = () => {
                   onChange={(e) => setUploadName(e.target.value)}
                   placeholder="Misal: Batas Blok IPPKH 2026"
                   required
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 px-3"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 px-3 text-base sm:text-xs"
                 />
               </div>
 
@@ -2200,7 +2518,7 @@ export const MapViewerView: React.FC = () => {
                 <select
                   value={uploadCrs}
                   onChange={(e) => setUploadCrs(e.target.value as CoordCrsCode)}
-                  className="w-full min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 font-mono"
+                  className="w-full min-h-[44px] sm:min-h-[42px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs font-mono"
                 >
                   {CRS_OPTION_GROUPS.map((grp) => (
                     <optgroup key={grp.label} label={grp.label}>
@@ -2395,7 +2713,7 @@ export const MapViewerView: React.FC = () => {
                             ? 'mis. 116.50'
                             : 'mis. 444320'
                         }
-                        className="w-full min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 font-mono"
+                        className="w-full min-h-[42px] sm:min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-base sm:text-xs font-mono"
                       />
                     </div>
                     <div className="space-y-0.5">
@@ -2413,7 +2731,7 @@ export const MapViewerView: React.FC = () => {
                             ? 'mis. 116.70'
                             : 'mis. 466580'
                         }
-                        className="w-full min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 font-mono"
+                        className="w-full min-h-[42px] sm:min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-base sm:text-xs font-mono"
                       />
                     </div>
                     <div className="space-y-0.5">
@@ -2433,7 +2751,7 @@ export const MapViewerView: React.FC = () => {
                             ? 'mis. 155200'
                             : 'mis. 9845200'
                         }
-                        className="w-full min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 font-mono"
+                        className="w-full min-h-[42px] sm:min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-base sm:text-xs font-mono"
                       />
                     </div>
                     <div className="space-y-0.5">
@@ -2453,7 +2771,7 @@ export const MapViewerView: React.FC = () => {
                             ? 'mis. 177300'
                             : 'mis. 9867300'
                         }
-                        className="w-full min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 font-mono"
+                        className="w-full min-h-[42px] sm:min-h-[38px] rounded-lg border border-stone-300 bg-white px-2.5 text-base sm:text-xs font-mono"
                       />
                     </div>
                   </div>

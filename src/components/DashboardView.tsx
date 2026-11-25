@@ -395,8 +395,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* Filter Perusahaan */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex flex-wrap gap-1 p-1 bg-white border border-stone-200 rounded-xl">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
+        <div className="grid grid-cols-2 sm:inline-flex sm:flex-wrap gap-1 p-1 bg-white border border-stone-200 rounded-xl w-full sm:w-auto">
           {(['ALL', ...COMPANIES] as const).map((comp) => (
             <button
               key={comp}
@@ -405,13 +405,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 setCompanyFilter(comp);
                 setTrendPetakFilter('ALL');
               }}
-              className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+              className={`min-h-[42px] sm:min-h-[38px] px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap text-center ${
                 companyFilter === comp
                   ? 'bg-[#14532D] text-white'
                   : 'text-stone-600 hover:text-[#141A15]'
               }`}
             >
-              {comp === 'ALL' ? 'Semua Perusahaan' : comp}
+              {comp === 'ALL' ? 'Semua PT' : comp}
             </button>
           ))}
         </div>
@@ -713,7 +713,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             <select
               value={trendPetakFilter}
               onChange={(e) => setTrendPetakFilter(e.target.value)}
-              className="min-h-[38px] rounded-xl border border-stone-300 bg-white px-3 text-xs text-[#141A15]"
+              className="min-h-[42px] sm:min-h-[38px] rounded-xl border border-stone-300 bg-white px-3 text-base sm:text-xs text-[#141A15]"
             >
               <option value="ALL">Semua Petak</option>
               {trendPetakOptions.map((pt) => (
@@ -726,7 +726,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             <button
               type="button"
               onClick={() => setShowEvalConfig((v) => !v)}
-              className={`min-h-[38px] px-3 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+              className={`min-h-[42px] sm:min-h-[38px] px-3 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors ${
                 showEvalConfig
                   ? 'bg-[#14532D] text-white border-[#14532D]'
                   : 'bg-white text-stone-700 border-stone-300 hover:bg-[#F6F7F4]'
@@ -746,7 +746,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 Pengaturan Evaluasi Pertumbuhan &amp; Penyulaman (
                 {companyFilter === 'ALL' ? 'Default Semua PT' : companyFilter})
               </div>
-              <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-stone-700">
+              <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-stone-700 min-h-[36px]">
                 <input
                   type="checkbox"
                   checked={evalEnabledInput}
@@ -770,7 +770,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                   disabled={!evalEnabledInput}
                   value={minSurvivalInput}
                   onChange={(e) => setMinSurvivalInput(e.target.value)}
-                  className="w-full min-h-[40px] rounded-lg border border-stone-300 bg-white px-3 font-mono disabled:bg-stone-100 disabled:text-stone-400"
+                  className="w-full min-h-[44px] sm:min-h-[40px] rounded-lg border border-stone-300 bg-white px-3 text-base sm:text-xs font-mono disabled:bg-stone-100 disabled:text-stone-400"
                 />
               </div>
               <div className="space-y-1">
@@ -785,7 +785,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                   disabled={!evalEnabledInput}
                   value={minDeltaInput}
                   onChange={(e) => setMinDeltaInput(e.target.value)}
-                  className="w-full min-h-[40px] rounded-lg border border-stone-300 bg-white px-3 font-mono disabled:bg-stone-100 disabled:text-stone-400"
+                  className="w-full min-h-[44px] sm:min-h-[40px] rounded-lg border border-stone-300 bg-white px-3 text-base sm:text-xs font-mono disabled:bg-stone-100 disabled:text-stone-400"
                 />
               </div>
               <button
@@ -850,8 +850,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             {/* SVG Column + Survival Trend Visualization */}
-            <div className="lg:col-span-7 space-y-3">
-              <div className="flex items-center justify-between text-xs text-stone-600">
+            <div className="lg:col-span-7 min-w-0 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-stone-600">
                 <span className="font-semibold text-[#141A15]">
                   Rata-rata Tinggi (cm) &amp; Survival (%) per Periode
                 </span>
@@ -860,8 +860,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 </span>
               </div>
 
-              <div className="rounded-xl border border-stone-200 bg-[#F6F7F4] p-4 overflow-x-auto">
-                <div className="min-w-[360px] flex items-end gap-4 h-48 pt-6 pb-2 border-b border-stone-300">
+              <div className="rounded-xl border border-stone-200 bg-[#F6F7F4] p-3 sm:p-4 overflow-x-auto">
+                <div className="min-w-[300px] sm:min-w-[360px] flex items-end gap-3 sm:gap-4 h-48 pt-6 pb-2 border-b border-stone-300">
                   {periodChartSeries.map((pt) => {
                     const heightPct = Math.max(
                       8,
@@ -916,7 +916,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
 
             {/* Petak Evaluation & Infill Alert Table */}
-            <div className="lg:col-span-5 space-y-3">
+            <div className="lg:col-span-5 min-w-0 space-y-3">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-semibold text-[#141A15] flex items-center gap-1.5">
                   <AlertTriangle className="w-4 h-4 text-amber-600" />
@@ -979,7 +979,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
 
       {/* Condition Breakdown & Location Table */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-5 bg-white border border-stone-200 rounded-2xl p-5 space-y-4">
+        <div className="lg:col-span-5 min-w-0 bg-white border border-stone-200 rounded-2xl p-4 sm:p-5 space-y-4">
           <div className="flex items-center justify-between border-b border-stone-200/80 pb-3">
             <h2 className="text-sm font-bold text-[#141A15] font-display flex items-center gap-2">
               <Activity className="w-4 h-4 text-[#14532D]" />
@@ -1041,7 +1041,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           </div>
         </div>
 
-        <div className="lg:col-span-7 bg-white border border-stone-200 rounded-2xl p-5 space-y-4">
+        <div className="lg:col-span-7 min-w-0 bg-white border border-stone-200 rounded-2xl p-4 sm:p-5 space-y-4">
           <div className="flex items-center justify-between border-b border-stone-200/80 pb-3">
             <h2 className="text-sm font-bold text-[#141A15] font-display flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-[#14532D]" />
@@ -1066,63 +1066,110 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               </button>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-stone-200 text-[11px] font-semibold text-stone-500">
-                    <th className="py-2.5 pr-3">Perusahaan &amp; Lokasi</th>
-                    <th className="py-2.5 px-3">Menu</th>
-                    <th className="py-2.5 px-3 text-right">Petak</th>
-                    <th className="py-2.5 px-3 text-right">Total</th>
-                    <th className="py-2.5 px-3 text-right">% Hidup</th>
-                    <th className="py-2.5 pl-3 text-right">Rata T / D</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-100 text-xs">
-                  {locationSummary.slice(0, 10).map((row) => {
-                    const hidupPct = Math.round(
-                      ((row.total - row.mati) / row.total) * 100
-                    );
-                    const avgH = row.livingCount
-                      ? Math.round((row.sumH / row.livingCount) * 10) / 10
-                      : 0;
-                    const avgD = row.livingCount
-                      ? Math.round((row.sumD / row.livingCount) * 10) / 10
-                      : 0;
-                    return (
-                      <tr
-                        key={`${row.perusahaan}__${row.menuType}__${row.lokasiKey}`}
-                        className="hover:bg-[#F6F7F4]/70"
-                      >
-                        <td className="py-2.5 pr-3">
-                          <div className="font-semibold text-[#141A15]">
+            <>
+              {/* Mobile Card List (no horizontal scrolling on phones) */}
+              <div className="md:hidden divide-y divide-stone-100">
+                {locationSummary.slice(0, 10).map((row) => {
+                  const hidupPct = Math.round(
+                    ((row.total - row.mati) / row.total) * 100
+                  );
+                  const avgH = row.livingCount
+                    ? Math.round((row.sumH / row.livingCount) * 10) / 10
+                    : 0;
+                  const avgD = row.livingCount
+                    ? Math.round((row.sumD / row.livingCount) * 10) / 10
+                    : 0;
+                  return (
+                    <div
+                      key={`${row.perusahaan}__${row.menuType}__${row.lokasiKey}`}
+                      className="py-3 first:pt-0 last:pb-0 space-y-1.5 text-xs"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-[#141A15] truncate">
                             {row.lokasi}
                           </div>
                           <div className="text-[11px] text-stone-500">
-                            {row.perusahaan}
+                            {row.perusahaan} · {getMenuLabel(row.menuType)}
                           </div>
-                        </td>
-                        <td className="py-2.5 px-3 text-stone-600 whitespace-nowrap">
-                          {getMenuLabel(row.menuType)}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-stone-700">
-                          {row.menuType === 'SENSUS' ? '-' : row.petaks.size}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-[#141A15]">
-                          {row.total}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#14532D] font-semibold">
-                          {hidupPct}%
-                        </td>
-                        <td className="py-2.5 pl-3 text-right font-mono tabular-nums text-stone-600 whitespace-nowrap">
-                          {avgH} cm / {avgD} mm
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        </div>
+                        <span className="font-mono tabular-nums font-bold text-[#14532D] shrink-0">
+                          {hidupPct}% hidup
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono tabular-nums text-stone-600">
+                        <span>Total: {row.total}</span>
+                        {row.menuType !== 'SENSUS' && (
+                          <span>Petak: {row.petaks.size}</span>
+                        )}
+                        <span>
+                          Rata T/D: {avgH} cm / {avgD} mm
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Desktop / Tablet Table */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-stone-200 text-[11px] font-semibold text-stone-500">
+                      <th className="py-2.5 pr-3">Perusahaan &amp; Lokasi</th>
+                      <th className="py-2.5 px-3">Menu</th>
+                      <th className="py-2.5 px-3 text-right">Petak</th>
+                      <th className="py-2.5 px-3 text-right">Total</th>
+                      <th className="py-2.5 px-3 text-right">% Hidup</th>
+                      <th className="py-2.5 pl-3 text-right">Rata T / D</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100 text-xs">
+                    {locationSummary.slice(0, 10).map((row) => {
+                      const hidupPct = Math.round(
+                        ((row.total - row.mati) / row.total) * 100
+                      );
+                      const avgH = row.livingCount
+                        ? Math.round((row.sumH / row.livingCount) * 10) / 10
+                        : 0;
+                      const avgD = row.livingCount
+                        ? Math.round((row.sumD / row.livingCount) * 10) / 10
+                        : 0;
+                      return (
+                        <tr
+                          key={`${row.perusahaan}__${row.menuType}__${row.lokasiKey}`}
+                          className="hover:bg-[#F6F7F4]/70"
+                        >
+                          <td className="py-2.5 pr-3">
+                            <div className="font-semibold text-[#141A15]">
+                              {row.lokasi}
+                            </div>
+                            <div className="text-[11px] text-stone-500">
+                              {row.perusahaan}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-stone-600 whitespace-nowrap">
+                            {getMenuLabel(row.menuType)}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-stone-700">
+                            {row.menuType === 'SENSUS' ? '-' : row.petaks.size}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-[#141A15]">
+                            {row.total}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#14532D] font-semibold">
+                            {hidupPct}%
+                          </td>
+                          <td className="py-2.5 pl-3 text-right font-mono tabular-nums text-stone-600 whitespace-nowrap">
+                            {avgH} cm / {avgD} mm
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       </div>

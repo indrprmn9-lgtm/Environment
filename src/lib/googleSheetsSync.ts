@@ -390,6 +390,7 @@ export async function syncCompanyDataToSpreadsheet(params: {
     'Akurasi Horizontal (m)',
     'Akurasi Vertikal (m)',
     'Sumber GNSS',
+    'Alasan Deviasi GNSS',
     'Foto Bukti',
     'Keterangan',
   ];
@@ -413,6 +414,7 @@ export async function syncCompanyDataToSpreadsheet(params: {
     r.horizontalAccuracyM ?? '',
     r.verticalAccuracyM ?? '',
     r.gnssSource || '',
+    r.gnssOverrideReason || '',
     r.photoDataUrl ? 'Terlampir (<=150KB)' : '-',
     r.keterangan || '',
   ];

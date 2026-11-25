@@ -59,15 +59,19 @@ import {
   type ConservationStructureStatus,
   type CoordCrsCode,
   type CoverCropDensity,
+  DEFAULT_GNSS_ACCURACY_SETTINGS,
   DEFAULT_GROWTH_EVAL_SETTINGS,
   extractPeriode,
   FGS_SPECIES,
   type FieldCondition,
   getCompanyKey,
+  type GnssAccuracySettings,
+  type GnssModeKey,
   type GrowthEvalSettings,
   type LocationMaster,
   LOKAL_MPTS_SPECIES,
   makeSafeKey,
+  MAX_GNSS_ACCURACY_M,
   type MenuType,
   normalizeDisplayText,
   type PetakMaster,
@@ -106,6 +110,7 @@ export interface CreatePlantInput {
   horizontalAccuracyM?: number | null;
   verticalAccuracyM?: number | null;
   gnssSource?: string | null;
+  gnssOverrideReason?: string | null;
   coordCrs?: string | null;
   photoDataUrl?: string | null;
 }
@@ -176,6 +181,7 @@ interface DataContextValue {
   companySpreadsheets: CompanySpreadsheet[];
   baseMaps: BaseMapLayer[];
   evalSettings: GrowthEvalSettings[];
+  gnssSettings: GnssAccuracySettings[];
   staffList: StaffMember[];
   pendingCount: number;
   conflictCount: number;
@@ -330,6 +336,13 @@ interface DataContextValue {
     minSurvivalPct: number;
     minDeltaHeightCm: number;
   }) => Promise<GrowthEvalSettings>;
+  getGnssSettingFor: (company: 'ALL' | CompanyName) => GnssAccuracySettings;
+  adminSaveGnssSetting: (params: {
+    companyKey: string;
+    enforced: boolean;
+    defaultMaxAccuracyM: number;
+    modeThresholds: Record<GnssModeKey, number>;
+  }) => Promise<GnssAccuracySettings>;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -389,6 +402,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
   >([]);
   const [baseMaps, setBaseMaps] = useState<BaseMapLayer[]>([]);
   const [evalSettings, setEvalSettings] = useState<GrowthEvalSettings[]>([]);
+  const [gnssSettings, setGnssSettings] = useState<GnssAccuracySettings[]>([]);
   const [staffList, setStaffList] = useState<StaffMember[]>([]);
 
   const [offlineQueue, setOfflineQueue] =
@@ -444,6 +458,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       setCompanySpreadsheets(snapshot.companySpreadsheets);
       setBaseMaps(snapshot.baseMaps);
       setEvalSettings(snapshot.evalSettings);
+      setGnssSettings(snapshot.gnssSettings);
       setStaffList(snapshot.staffList);
       setQueueHydrated(true);
       setIsLoading(false);
@@ -509,6 +524,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         )
       : collection(firestore, 'growth_eval_settings');
 
+    const gnssQuery = isCompanyScoped
+      ? query(
+          collection(firestore, 'gnss_accuracy_settings'),
+          where('companyKey', 'in', [
+            'ALL',
+            getCompanyKey(resolveCompanyName(assignedCompany)),
+          ])
+        )
+      : collection(firestore, 'gnss_accuracy_settings');
+
     try {
       const [
         plantSnap,
@@ -519,6 +544,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         speciesSnap,
         baseMapSnap,
         evalSnap,
+        gnssSnap,
         sheetSnap,
         staffSnap,
       ] = await Promise.all([
@@ -545,6 +571,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         ),
         getDocs(evalQuery).catch((err) =>
           handleFirestoreError(err, OperationType.LIST, 'growth_eval_settings')
+        ),
+        getDocs(gnssQuery).catch((err) =>
+          handleFirestoreError(err, OperationType.LIST, 'gnss_accuracy_settings')
         ),
         profile.role === 'admin'
           ? getDocs(collection(firestore, 'company_spreadsheets')).catch(
@@ -602,6 +631,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
                 ? data.verticalAccuracyM
                 : null,
             gnssSource: data.gnssSource ? String(data.gnssSource) : null,
+            gnssOverrideReason: data.gnssOverrideReason
+              ? String(data.gnssOverrideReason)
+              : null,
             coordCrs: data.coordCrs ? String(data.coordCrs) : 'EPSG:4326',
             photoDataUrl: data.photoDataUrl ? String(data.photoDataUrl) : null,
             sheetSyncedAt: data.sheetSyncedAt
@@ -854,6 +886,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         };
       });
 
+      const gnssList: GnssAccuracySettings[] = gnssSnap.docs.map((d) => {
+        const data = d.data();
+        const defMax = Number(data.defaultMaxAccuracyM ?? MAX_GNSS_ACCURACY_M);
+        const mt = (data.modeThresholds || {}) as Record<string, unknown>;
+        return {
+          companyKey: String(data.companyKey || d.id),
+          enforced: data.enforced !== false,
+          defaultMaxAccuracyM: defMax,
+          modeThresholds: {
+            optimal: Number(mt.optimal ?? defMax),
+            precision_static: Number(mt.precision_static ?? defMax),
+            continuous: Number(mt.continuous ?? defMax),
+            fast: Number(mt.fast ?? defMax),
+          },
+          updatedByUid: data.updatedByUid
+            ? String(data.updatedByUid)
+            : undefined,
+          updatedAt: serializeTimestamp(data.updatedAt),
+        };
+      });
+
       const sheetList: CompanySpreadsheet[] = sheetSnap
         ? sheetSnap.docs.map((d) => {
             const data = d.data();
@@ -905,6 +958,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       setCompanySpreadsheets(sheetList);
       setBaseMaps(mapList);
       setEvalSettings(evalList);
+      setGnssSettings(gnssList);
       setStaffList(staffItems);
 
       void saveServerSnapshot({
@@ -917,6 +971,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         companySpreadsheets: sheetList,
         baseMaps: mapList,
         evalSettings: evalList,
+        gnssSettings: gnssList,
         staffList: staffItems,
         cachedAt: new Date().toISOString(),
       });
@@ -938,6 +993,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       setCompanySpreadsheets([]);
       setBaseMaps([]);
       setEvalSettings([]);
+      setGnssSettings([]);
       setStaffList([]);
       setIsLoading(false);
       return;
@@ -1403,6 +1459,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             horizontalAccuracyM: rec.horizontalAccuracyM ?? null,
             verticalAccuracyM: rec.verticalAccuracyM ?? null,
             gnssSource: rec.gnssSource ?? null,
+            gnssOverrideReason: rec.gnssOverrideReason
+              ? rec.gnssOverrideReason.trim().slice(0, 250)
+              : null,
             coordCrs: rec.coordCrs ?? 'EPSG:4326',
             photoDataUrl: rec.photoDataUrl ?? null,
             sheetSyncedAt: null,
@@ -1941,6 +2000,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         horizontalAccuracyM: input.horizontalAccuracyM ?? null,
         verticalAccuracyM: input.verticalAccuracyM ?? null,
         gnssSource: input.gnssSource ?? null,
+        gnssOverrideReason: input.gnssOverrideReason
+          ? input.gnssOverrideReason.trim().slice(0, 250)
+          : null,
         coordCrs: input.coordCrs ?? 'EPSG:4326',
         photoDataUrl: input.photoDataUrl ?? null,
         createdByUid: profile.uid,
@@ -2004,6 +2066,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           horizontalAccuracyM: record.horizontalAccuracyM,
           verticalAccuracyM: record.verticalAccuracyM,
           gnssSource: record.gnssSource,
+          gnssOverrideReason: record.gnssOverrideReason,
           coordCrs: record.coordCrs,
           photoDataUrl: record.photoDataUrl,
           sheetSyncedAt: null,
@@ -3199,6 +3262,77 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
     [profile]
   );
 
+  const getGnssSettingFor = useCallback(
+    (company: 'ALL' | CompanyName): GnssAccuracySettings => {
+      if (company !== 'ALL') {
+        const ck = getCompanyKey(company);
+        const exact = gnssSettings.find((s) => s.companyKey === ck);
+        if (exact) return exact;
+      }
+      const globalSet = gnssSettings.find((s) => s.companyKey === 'ALL');
+      return globalSet || DEFAULT_GNSS_ACCURACY_SETTINGS;
+    },
+    [gnssSettings]
+  );
+
+  const adminSaveGnssSetting = useCallback(
+    async (params: {
+      companyKey: string;
+      enforced: boolean;
+      defaultMaxAccuracyM: number;
+      modeThresholds: Record<GnssModeKey, number>;
+    }): Promise<GnssAccuracySettings> => {
+      if (!profile || profile.role !== 'admin') {
+        throw new Error(
+          'Hanya Administrator yang dapat mengatur ambang batas akurasi GNSS.'
+        );
+      }
+      const ck = params.companyKey || 'ALL';
+      const clampM = (v: number, fallback: number) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.min(100, Math.max(1, Math.round(n * 10) / 10));
+      };
+      const defM = clampM(params.defaultMaxAccuracyM, MAX_GNSS_ACCURACY_M);
+      const cleanModes: Record<GnssModeKey, number> = {
+        optimal: clampM(params.modeThresholds.optimal, defM),
+        precision_static: clampM(params.modeThresholds.precision_static, defM),
+        continuous: clampM(params.modeThresholds.continuous, defM),
+        fast: clampM(params.modeThresholds.fast, defM),
+      };
+      try {
+        await setDoc(doc(firestore, 'gnss_accuracy_settings', ck), {
+          companyKey: ck,
+          enforced: params.enforced !== false,
+          defaultMaxAccuracyM: defM,
+          modeThresholds: cleanModes,
+          updatedByUid: profile.uid,
+          updatedAt: serverTimestamp(),
+        });
+        const setting: GnssAccuracySettings = {
+          companyKey: ck,
+          enforced: params.enforced !== false,
+          defaultMaxAccuracyM: defM,
+          modeThresholds: cleanModes,
+          updatedByUid: profile.uid,
+          updatedAt: new Date().toISOString(),
+        };
+        setGnssSettings((prev) => [
+          ...prev.filter((s) => s.companyKey !== ck),
+          setting,
+        ]);
+        return setting;
+      } catch (err) {
+        handleFirestoreError(
+          err,
+          OperationType.WRITE,
+          `gnss_accuracy_settings/${ck}`
+        );
+      }
+    },
+    [profile]
+  );
+
   const clearSyncError = useCallback(() => setLastSyncError(null), []);
 
   const value: DataContextValue = {
@@ -3217,6 +3351,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
     companySpreadsheets,
     baseMaps: scopedBaseMaps,
     evalSettings,
+    gnssSettings,
     staffList,
     pendingCount,
     conflictCount,
@@ -3256,6 +3391,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
     fetchBaseMapDetail,
     getEvalSettingFor,
     adminSaveEvalSetting,
+    getGnssSettingFor,
+    adminSaveGnssSetting,
   };
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;

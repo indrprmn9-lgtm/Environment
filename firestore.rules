@@ -157,7 +157,7 @@ service cloud.firestore {
         'kelompokTanaman', 'jenisTanaman', 'tinggiCm', 'diameterMm',
         'kondisiTanaman', 'keterangan', 'extremeConfirmed',
         'latitude', 'longitude', 'altitudeM', 'horizontalAccuracyM', 'verticalAccuracyM',
-        'gnssSource', 'coordCrs', 'photoDataUrl', 'sheetSyncedAt',
+        'gnssSource', 'gnssOverrideReason', 'coordCrs', 'photoDataUrl', 'sheetSyncedAt',
         'createdByUid', 'createdByEmail', 'updatedByUid', 'createdAt', 'updatedAt'
       ]) &&
       data.perusahaan is string && data.companyKey is string &&
@@ -191,6 +191,7 @@ service cloud.firestore {
       isOptionalNumInRange(data, 'horizontalAccuracyM', 0, 100000) &&
       isOptionalNumInRange(data, 'verticalAccuracyM', 0, 100000) &&
       isOptionalStrMax(data, 'gnssSource', 120) &&
+      isOptionalStrMax(data, 'gnssOverrideReason', 250) &&
       isOptionalStrMax(data, 'coordCrs', 40) &&
       isOptionalStrMax(data, 'photoDataUrl', 250000) &&
       isOptionalStrMax(data, 'sheetSyncedAt', 40) &&
@@ -356,11 +357,36 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidGnssModeThreshold(data, modeKey) {
+      return modeKey in data &&
+        (data[modeKey] is int || data[modeKey] is float) &&
+        data[modeKey] >= 1 &&
+        data[modeKey] <= 100;
+    }
+
+    function isValidGnssAccuracySettings(data, docId) {
+      return data.keys().hasAll(['companyKey', 'enforced', 'defaultMaxAccuracyM', 'modeThresholds', 'updatedByUid', 'updatedAt']) &&
+        data.keys().hasOnly(['companyKey', 'enforced', 'defaultMaxAccuracyM', 'modeThresholds', 'updatedByUid', 'updatedAt']) &&
+        data.companyKey in ['ALL', 'pt_nbss', 'pt_dtsa', 'pt_dtr'] &&
+        docId == data.companyKey &&
+        data.enforced is bool &&
+        (data.defaultMaxAccuracyM is int || data.defaultMaxAccuracyM is float) && data.defaultMaxAccuracyM >= 1 && data.defaultMaxAccuracyM <= 100 &&
+        data.modeThresholds is map &&
+        data.modeThresholds.keys().hasAll(['optimal', 'precision_static', 'continuous', 'fast']) &&
+        data.modeThresholds.keys().hasOnly(['optimal', 'precision_static', 'continuous', 'fast']) &&
+        isValidGnssModeThreshold(data.modeThresholds, 'optimal') &&
+        isValidGnssModeThreshold(data.modeThresholds, 'precision_static') &&
+        isValidGnssModeThreshold(data.modeThresholds, 'continuous') &&
+        isValidGnssModeThreshold(data.modeThresholds, 'fast') &&
+        data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+        data.updatedAt is timestamp;
+    }
+
     // --- Collection Rules ---
 
     match /staff_whitelist/{staffId} {
       allow get: if isValidId(staffId) && (
-        isAdmin() || (isVerified() && existing().email.lower() == userEmailLower())
+        isAdmin() || (isVerified() && (resource == null || existing().email.lower() == userEmailLower()))
       );
       allow list: if isAdmin() || (
         isVerified() && resource.data.email == userEmailLower()
@@ -416,11 +442,13 @@ service cloud.firestore {
             isVerified() &&
             request.auth.uid == userId &&
             incoming().role == existing().role &&
-            incoming().active == existing().active &&
             incoming().staffId == existing().staffId &&
             exists(/databases/$(database)/documents/staff_whitelist/$(existing().staffId)) &&
+            get(/databases/$(database)/documents/staff_whitelist/$(existing().staffId)).data.email.lower() == userEmailLower() &&
+            get(/databases/$(database)/documents/staff_whitelist/$(existing().staffId)).data.active == true &&
+            incoming().active == true &&
             get(/databases/$(database)/documents/staff_whitelist/$(existing().staffId)).data.assignedCompany == incoming().assignedCompany &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'assignedCompany', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'assignedCompany', 'rangeStart', 'rangeEnd', 'active', 'updatedAt'])
           )
         );
       allow delete: if isAdmin() && isValidId(userId);
@@ -460,7 +488,14 @@ service cloud.firestore {
     }
 
     match /plant_records/{recordId} {
-      allow get: if isValidId(recordId) && canAccessCompany(existing().perusahaan);
+      allow get: if isValidId(recordId) && (
+        isAdmin() || (
+          isActiveStaff() && (
+            resource == null ||
+            canAccessCompany(existing().perusahaan)
+          )
+        )
+      );
       allow list: if canAccessCompany(resource.data.perusahaan);
       allow create: if isActiveStaff() &&
         isValidId(recordId) &&
@@ -489,7 +524,14 @@ service cloud.firestore {
     }
 
     match /field_conditions/{conditionId} {
-      allow get: if isValidId(conditionId) && canAccessCompany(existing().perusahaan);
+      allow get: if isValidId(conditionId) && (
+        isAdmin() || (
+          isActiveStaff() && (
+            resource == null ||
+            canAccessCompany(existing().perusahaan)
+          )
+        )
+      );
       allow list: if canAccessCompany(resource.data.perusahaan);
       allow create: if isActiveStaff() &&
         isValidId(conditionId) &&
@@ -521,7 +563,14 @@ service cloud.firestore {
     }
 
     match /canopy_covers/{canopyId} {
-      allow get: if isValidId(canopyId) && canAccessCompany(existing().perusahaan);
+      allow get: if isValidId(canopyId) && (
+        isAdmin() || (
+          isActiveStaff() && (
+            resource == null ||
+            canAccessCompany(existing().perusahaan)
+          )
+        )
+      );
       allow list: if canAccessCompany(resource.data.perusahaan);
       allow create: if isActiveStaff() &&
         isValidId(canopyId) &&
@@ -553,7 +602,14 @@ service cloud.firestore {
     }
 
     match /locations_master/{docId} {
-      allow get: if isValidId(docId) && canAccessCompany(existing().perusahaan);
+      allow get: if isValidId(docId) && (
+        isAdmin() || (
+          isActiveStaff() && (
+            resource == null ||
+            canAccessCompany(existing().perusahaan)
+          )
+        )
+      );
       allow list: if canAccessCompany(resource.data.perusahaan);
       allow create: if isActiveStaff() &&
         isValidId(docId) &&
@@ -571,7 +627,14 @@ service cloud.firestore {
     }
 
     match /petaks_master/{docId} {
-      allow get: if isValidId(docId) && canAccessCompany(existing().perusahaan);
+      allow get: if isValidId(docId) && (
+        isAdmin() || (
+          isActiveStaff() && (
+            resource == null ||
+            canAccessCompany(existing().perusahaan)
+          )
+        )
+      );
       allow list: if canAccessCompany(resource.data.perusahaan);
       allow create: if isAdmin() &&
         isValidId(docId) &&
@@ -588,7 +651,14 @@ service cloud.firestore {
     }
 
     match /species_master/{docId} {
-      allow get: if isValidId(docId) && canAccessCompany(existing().perusahaan);
+      allow get: if isValidId(docId) && (
+        isAdmin() || (
+          isActiveStaff() && (
+            resource == null ||
+            canAccessCompany(existing().perusahaan)
+          )
+        )
+      );
       allow list: if canAccessCompany(resource.data.perusahaan);
       allow create: if isAdmin() &&
         isValidId(docId) &&
@@ -620,7 +690,14 @@ service cloud.firestore {
     }
 
     match /base_map_layers/{layerId} {
-      allow get: if isValidId(layerId) && canAccessCompany(existing().perusahaan);
+      allow get: if isValidId(layerId) && (
+        isAdmin() || (
+          isActiveStaff() && (
+            resource == null ||
+            canAccessCompany(existing().perusahaan)
+          )
+        )
+      );
       allow list: if canAccessCompany(resource.data.perusahaan);
       allow create: if isAdmin() &&
         isValidId(layerId) &&
@@ -657,6 +734,17 @@ service cloud.firestore {
       allow create, update: if isAdmin() &&
         isValidId(companyKey) &&
         isValidGrowthEvalSettings(incoming(), companyKey) &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(companyKey);
+    }
+
+    match /gnss_accuracy_settings/{companyKey} {
+      allow get: if isValidId(companyKey) && canAccessCompanyKey(companyKey);
+      allow list: if canAccessCompanyKey(resource.data.companyKey);
+      allow create, update: if isAdmin() &&
+        isValidId(companyKey) &&
+        isValidGnssAccuracySettings(incoming(), companyKey) &&
         incoming().updatedByUid == request.auth.uid &&
         incoming().updatedAt == request.time;
       allow delete: if isAdmin() && isValidId(companyKey);

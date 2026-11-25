@@ -12,15 +12,15 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.svg', 'apple-touch-icon.png'],
+        includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
         manifest: {
           id: '/',
           name: 'Environment — Sensus & Monitoring Tanaman',
           short_name: 'Environment',
           description:
             'Aplikasi lapangan offline-first untuk penginputan data sensus tanaman dan monitoring kawasan IPPKH & APL.',
-          theme_color: '#15803D',
-          background_color: '#F8FAFC',
+          theme_color: '#14532D',
+          background_color: '#F6F7F4',
           display: 'standalone',
           start_url: '/',
           scope: '/',
@@ -46,6 +46,9 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          skipWaiting: true,
+          clientsClaim: true,
+          cleanupOutdatedCaches: true,
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           runtimeCaching: [

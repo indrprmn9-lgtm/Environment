@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
   GoogleAuthProvider,
   onAuthStateChanged,
+  reauthenticateWithPopup,
   signInWithPopup,
   signOut,
   type User,
@@ -396,11 +397,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             }
           } else if (
             existing.name !== staffName ||
-            existing.assignedCompany !== assignedCompany
+            existing.assignedCompany !== assignedCompany ||
+            existing.active !== true ||
+            (existing.rangeStart ?? null) !== rangeStart ||
+            (existing.rangeEnd ?? null) !== rangeEnd
           ) {
             await updateDoc(userRef, {
               name: staffName,
               assignedCompany,
+              rangeStart,
+              rangeEnd,
+              active: true,
               updatedAt: serverTimestamp(),
             });
           }
@@ -469,11 +476,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const signInWithGoogle = async () => {
     setAuthError(null);
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const cred = GoogleAuthProvider.credentialFromResult(result);
-      if (cred?.accessToken) {
-        setMemorySheetsToken(cred.accessToken);
-      }
+      await signInWithPopup(auth, googleProvider);
+      // Do NOT store googleProvider token as sheetsAccessToken:
+      // googleProvider only requests basic profile/email, not Google Sheets scope.
+      setMemorySheetsToken(null);
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : 'Gagal masuk dengan Google.';
@@ -486,9 +492,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const connectGoogleSheets = async (): Promise<string | null> => {
     setAuthError(null);
     try {
-      const result = await signInWithPopup(auth, sheetsGoogleProvider);
+      const result = auth.currentUser
+        ? await reauthenticateWithPopup(auth.currentUser, sheetsGoogleProvider)
+        : await signInWithPopup(auth, sheetsGoogleProvider);
       const cred = GoogleAuthProvider.credentialFromResult(result);
       const token = cred?.accessToken || null;
+      if (!token) {
+        setMemorySheetsToken(null);
+        throw new Error(
+          'Token akses Google Sheets tidak diterima. Silakan coba lagi dan izinkan akses Google Sheets.'
+        );
+      }
+
+      // Verify granted OAuth scopes include spreadsheets before saving in memory
+      try {
+        const infoRes = await fetch(
+          `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(token)}`
+        );
+        if (infoRes.ok) {
+          const info = (await infoRes.json()) as { scope?: string };
+          const scopeStr = info.scope || '';
+          if (
+            !scopeStr.includes('https://www.googleapis.com/auth/spreadsheets')
+          ) {
+            setMemorySheetsToken(null);
+            throw new Error(
+              'Izin Google Sheets belum dicentang pada jendela persetujuan Google. Klik "Hubungkan Google Sheets" lalu centang kotak izin Google Sheets.'
+            );
+          }
+        }
+      } catch (scopeErr) {
+        if (
+          scopeErr instanceof Error &&
+          scopeErr.message.includes('Izin Google Sheets belum dicentang')
+        ) {
+          throw scopeErr;
+        }
+        // Ignore transient tokeninfo network hiccups; Sheets API call itself will verify
+      }
+
       setMemorySheetsToken(token);
       return token;
     } catch (err) {
