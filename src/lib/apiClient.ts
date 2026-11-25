@@ -65,6 +65,28 @@ export async function apiFetch<T>(
   return data as T;
 }
 
+async function probeHealthEndpoint(
+  url: string,
+  signal: AbortSignal
+): Promise<boolean> {
+  try {
+    const separator = url.includes('?') ? '&' : '?';
+    const res = await fetch(`${url}${separator}_=${Date.now()}`, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+      signal,
+    });
+    if (!res.ok) return false;
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) return false;
+    const data = (await res.json()) as { ok?: boolean };
+    return data?.ok === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function checkServerReachable(): Promise<boolean> {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     return false;
@@ -72,12 +94,9 @@ export async function checkServerReachable(): Promise<boolean> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 4500);
   try {
-    const res = await fetch('/api/health', {
-      method: 'GET',
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    return res.ok;
+    const staticOk = await probeHealthEndpoint('/health.json', controller.signal);
+    if (staticOk) return true;
+    return await probeHealthEndpoint('/api/health', controller.signal);
   } catch {
     return false;
   } finally {

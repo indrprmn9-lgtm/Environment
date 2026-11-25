@@ -42,6 +42,7 @@ export interface CachedServerSnapshot {
   gnssSettings: GnssAccuracySettings[];
   staffList: StaffMember[];
   cachedAt: string;
+  ownerUid?: string;
 }
 
 export const EMPTY_QUEUE: OfflineQueueState = {
@@ -64,6 +65,7 @@ export const EMPTY_SNAPSHOT: CachedServerSnapshot = {
   gnssSettings: [],
   staffList: [],
   cachedAt: '',
+  ownerUid: '',
 };
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
@@ -202,6 +204,7 @@ export async function loadServerSnapshot(): Promise<CachedServerSnapshot> {
       gnssSettings: Array.isArray(data.gnssSettings) ? data.gnssSettings : [],
       staffList: Array.isArray(data.staffList) ? data.staffList : [],
       cachedAt: typeof data.cachedAt === 'string' ? data.cachedAt : '',
+      ownerUid: typeof data.ownerUid === 'string' ? data.ownerUid : '',
     };
   } catch {
     return { ...EMPTY_SNAPSHOT };

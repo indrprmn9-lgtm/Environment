@@ -61,11 +61,14 @@ export const DataExplorerView: React.FC = () => {
     locations,
     companySpreadsheets,
     isOnline,
+    isLoading,
     isSyncing,
+    lastSyncAt,
     pendingCount,
     conflictCount,
     getSpeciesForCompanyGroup,
     syncPendingQueue,
+    refreshData,
     fetchPaginatedRecords,
     exportOfflineBackup,
     exportTodayBackup,
@@ -529,6 +532,12 @@ export const DataExplorerView: React.FC = () => {
           <p className="text-xs font-medium text-stone-500 font-mono tabular-nums">
             Total {pageResult.total} entri sesuai filter · Halaman {page} dari{' '}
             {totalPages} ({PAGE_LIMIT} baris/hal)
+            {lastSyncAt
+              ? ` · Pembaruan: ${lastSyncAt.toLocaleTimeString('id-ID', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}`
+              : ''}
           </p>
           <h1 className="text-2xl font-bold text-[#141A15] font-display tracking-tight mt-0.5">
             {isAdmin
@@ -538,6 +547,21 @@ export const DataExplorerView: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void refreshData(true)}
+            disabled={!isOnline || isLoading}
+            className="min-h-[42px] px-3.5 py-2 rounded-xl border border-stone-300 bg-white text-stone-700 text-xs font-semibold hover:bg-[#F6F7F4] disabled:opacity-50 flex items-center gap-2"
+            title="Ambil pembaruan data terbaru dari server"
+          >
+            <RefreshCw
+              className={`w-4 h-4 text-[#14532D] ${
+                isLoading ? 'animate-spin' : ''
+              }`}
+            />
+            {isLoading ? 'Memuat...' : 'Muat Ulang Data'}
+          </button>
+
           {pendingCount > 0 && (
             <button
               type="button"

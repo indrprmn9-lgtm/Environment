@@ -87,6 +87,7 @@ import { useAuth } from './AuthContext';
 
 const MAX_AUTO_RETRIES = 3;
 const BASE_MAP_CHUNK_SIZE = 450000;
+const OFFICER_REFRESH_COOLDOWN_MS = 4 * 60 * 60 * 1000;
 
 export interface CreatePlantInput {
   perusahaan: CompanyName;
@@ -230,7 +231,7 @@ interface DataContextValue {
     conflicts: number;
     error?: string;
   }>;
-  refreshData: () => Promise<void>;
+  refreshData: (force?: boolean) => Promise<void>;
   fetchPaginatedRecords: (
     params: PaginatedRecordsParams
   ) => Promise<PaginatedRecordsResult>;
@@ -417,10 +418,95 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
   const queueRef = useRef<OfflineQueueState>(EMPTY_QUEUE);
   const autoRetryCountRef = useRef(0);
   const retryTimerRef = useRef<number | null>(null);
+  const snapshotMetaRef = useRef<{ ownerUid: string; cachedAt: string }>({
+    ownerUid: '',
+    cachedAt: '',
+  });
+  const snapshotDataRef = useRef({
+    records: [] as PlantRecord[],
+    fieldConditions: [] as FieldCondition[],
+    canopyCovers: [] as CanopyCover[],
+    locations: [] as LocationMaster[],
+    petaks: [] as PetakMaster[],
+    species: [] as SpeciesMaster[],
+    companySpreadsheets: [] as CompanySpreadsheet[],
+    baseMaps: [] as BaseMapLayer[],
+    evalSettings: [] as GrowthEvalSettings[],
+    gnssSettings: [] as GnssAccuracySettings[],
+    staffList: [] as StaffMember[],
+  });
 
   useEffect(() => {
     queueRef.current = offlineQueue;
   }, [offlineQueue]);
+
+  useEffect(() => {
+    snapshotDataRef.current = {
+      records: serverRecords,
+      fieldConditions: serverFieldConditions,
+      canopyCovers: serverCanopyCovers,
+      locations: serverLocations,
+      petaks,
+      species,
+      companySpreadsheets,
+      baseMaps,
+      evalSettings,
+      gnssSettings,
+      staffList,
+    };
+  }, [
+    serverRecords,
+    serverFieldConditions,
+    serverCanopyCovers,
+    serverLocations,
+    petaks,
+    species,
+    companySpreadsheets,
+    baseMaps,
+    evalSettings,
+    gnssSettings,
+    staffList,
+  ]);
+
+  const persistSnapshotPatch = useCallback(
+    (
+      patch: Partial<{
+        records: PlantRecord[];
+        fieldConditions: FieldCondition[];
+        canopyCovers: CanopyCover[];
+        locations: LocationMaster[];
+      }>
+    ) => {
+      if (!profile?.uid) return;
+      const cachedAt =
+        snapshotMetaRef.current.ownerUid === profile.uid &&
+        snapshotMetaRef.current.cachedAt
+          ? snapshotMetaRef.current.cachedAt
+          : new Date().toISOString();
+      snapshotMetaRef.current = { ownerUid: profile.uid, cachedAt };
+      const merged = {
+        ...snapshotDataRef.current,
+        ...patch,
+        cachedAt,
+        ownerUid: profile.uid,
+      };
+      snapshotDataRef.current = {
+        records: merged.records,
+        fieldConditions: merged.fieldConditions,
+        canopyCovers: merged.canopyCovers,
+        locations: merged.locations,
+        petaks: merged.petaks,
+        species: merged.species,
+        companySpreadsheets: merged.companySpreadsheets,
+        baseMaps: merged.baseMaps,
+        evalSettings: merged.evalSettings,
+        gnssSettings: merged.gnssSettings,
+        staffList: merged.staffList,
+      };
+      void saveServerSnapshot(merged);
+    },
+    [profile?.uid]
+  );
 
   const mutateQueue = useCallback(
     (updater: (prev: OfflineQueueState) => OfflineQueueState) => {
@@ -448,6 +534,29 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       ]);
       if (!active) return;
       queueRef.current = loadedQueue;
+      snapshotMetaRef.current = {
+        ownerUid: snapshot.ownerUid || '',
+        cachedAt: snapshot.cachedAt || '',
+      };
+      snapshotDataRef.current = {
+        records: snapshot.records,
+        fieldConditions: snapshot.fieldConditions,
+        canopyCovers: snapshot.canopyCovers,
+        locations: snapshot.locations,
+        petaks: snapshot.petaks,
+        species: snapshot.species,
+        companySpreadsheets: snapshot.companySpreadsheets,
+        baseMaps: snapshot.baseMaps,
+        evalSettings: snapshot.evalSettings,
+        gnssSettings: snapshot.gnssSettings,
+        staffList: snapshot.staffList,
+      };
+      if (snapshot.cachedAt) {
+        const parsedCachedAt = new Date(snapshot.cachedAt);
+        if (!Number.isNaN(parsedCachedAt.getTime())) {
+          setLastSyncAt(parsedCachedAt);
+        }
+      }
       setOfflineQueue(loadedQueue);
       setServerRecords(snapshot.records);
       setServerFieldConditions(snapshot.fieldConditions);
@@ -499,42 +608,60 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
     [profile]
   );
 
-  const refreshData = useCallback(async () => {
-    if (authStatus !== 'authorized' || !profile || !profile.active) return;
-    if (!isOnline) return;
-    const assignedCompany = profile.assignedCompany || 'ALL';
-    const isCompanyScoped =
-      profile.role !== 'admin' && assignedCompany !== 'ALL';
-    const matchesCompany = (perusahaan: string) =>
-      !isCompanyScoped || perusahaan === assignedCompany;
-    const scopedQuery = (colName: string) =>
-      isCompanyScoped
+  const refreshData = useCallback(
+    async (force = false) => {
+      if (authStatus !== 'authorized' || !profile || !profile.active) return;
+      if (!isOnline) return;
+
+      if (!force && profile.role !== 'admin') {
+        const meta = snapshotMetaRef.current;
+        if (meta.ownerUid === profile.uid && meta.cachedAt) {
+          const ageMs = Date.now() - new Date(meta.cachedAt).getTime();
+          if (
+            Number.isFinite(ageMs) &&
+            ageMs >= 0 &&
+            ageMs < OFFICER_REFRESH_COOLDOWN_MS
+          ) {
+            setIsLoading(false);
+            return;
+          }
+        }
+      }
+
+      const assignedCompany = profile.assignedCompany || 'ALL';
+      const isCompanyScoped =
+        profile.role !== 'admin' && assignedCompany !== 'ALL';
+      const matchesCompany = (perusahaan: string) =>
+        !isCompanyScoped || perusahaan === assignedCompany;
+      const scopedQuery = (colName: string) =>
+        isCompanyScoped
+          ? query(
+              collection(firestore, colName),
+              where('perusahaan', '==', assignedCompany)
+            )
+          : collection(firestore, colName);
+      const evalQuery = isCompanyScoped
         ? query(
-            collection(firestore, colName),
-            where('perusahaan', '==', assignedCompany)
+            collection(firestore, 'growth_eval_settings'),
+            where('companyKey', 'in', [
+              'ALL',
+              getCompanyKey(resolveCompanyName(assignedCompany)),
+            ])
           )
-        : collection(firestore, colName);
-    const evalQuery = isCompanyScoped
-      ? query(
-          collection(firestore, 'growth_eval_settings'),
-          where('companyKey', 'in', [
-            'ALL',
-            getCompanyKey(resolveCompanyName(assignedCompany)),
-          ])
-        )
-      : collection(firestore, 'growth_eval_settings');
+        : collection(firestore, 'growth_eval_settings');
 
-    const gnssQuery = isCompanyScoped
-      ? query(
-          collection(firestore, 'gnss_accuracy_settings'),
-          where('companyKey', 'in', [
-            'ALL',
-            getCompanyKey(resolveCompanyName(assignedCompany)),
-          ])
-        )
-      : collection(firestore, 'gnss_accuracy_settings');
+      const gnssQuery = isCompanyScoped
+        ? query(
+            collection(firestore, 'gnss_accuracy_settings'),
+            where('companyKey', 'in', [
+              'ALL',
+              getCompanyKey(resolveCompanyName(assignedCompany)),
+            ])
+          )
+        : collection(firestore, 'gnss_accuracy_settings');
 
-    try {
+      setIsLoading(true);
+      try {
       const [
         plantSnap,
         fcSnap,
@@ -961,6 +1088,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       setGnssSettings(gnssList);
       setStaffList(staffItems);
 
+      const nowDate = new Date();
+      const nowIso = nowDate.toISOString();
+      snapshotMetaRef.current = { ownerUid: profile.uid, cachedAt: nowIso };
+      setLastSyncAt(nowDate);
+
       void saveServerSnapshot({
         records,
         fieldConditions: fieldConds,
@@ -973,7 +1105,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         evalSettings: evalList,
         gnssSettings: gnssList,
         staffList: staffItems,
-        cachedAt: new Date().toISOString(),
+        cachedAt: nowIso,
+        ownerUid: profile.uid,
       });
     } catch (err) {
       console.warn('Firestore bootstrap refresh warning:', err);
@@ -983,6 +1116,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [authStatus, profile, isOnline]);
 
   useEffect(() => {
+    if (!queueHydrated) return;
     if (authStatus !== 'authorized' || !profile || !profile.active) {
       setServerRecords([]);
       setServerFieldConditions([]);
@@ -998,12 +1132,28 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       setIsLoading(false);
       return;
     }
+    const snapshotOwnerMismatch =
+      Boolean(snapshotMetaRef.current.ownerUid) &&
+      snapshotMetaRef.current.ownerUid !== profile.uid;
+    if (snapshotOwnerMismatch) {
+      setServerRecords([]);
+      setServerFieldConditions([]);
+      setServerCanopyCovers([]);
+      setServerLocations([]);
+      setPetaks([]);
+      setSpecies([]);
+      setCompanySpreadsheets([]);
+      setBaseMaps([]);
+      setEvalSettings([]);
+      setGnssSettings([]);
+      setStaffList([]);
+    }
     if (isOnline) {
-      void refreshData();
+      void refreshData(snapshotOwnerMismatch);
     } else {
       setIsLoading(false);
     }
-  }, [authStatus, profile, isOnline, refreshData]);
+  }, [queueHydrated, authStatus, profile, isOnline, refreshData]);
 
   const matchesUserCompany = useCallback(
     (perusahaan: string) => {
@@ -1250,6 +1400,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       let encounteredError: string | undefined;
 
       try {
+        const syncedLocItems: LocationMaster[] = [];
+        const syncedCondItems: FieldCondition[] = [];
+        const syncedCanopyItems: CanopyCover[] = [];
+        const syncedPlantItems: PlantRecord[] = [];
+
         // 1. Locations
         const locDone = new Set<string>();
         for (const loc of scopedLocs) {
@@ -1257,6 +1412,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           const cleanName = normalizeDisplayText(loc.name);
           const res = await ensureLocationDoc(perusahaan, cleanName);
           if (res) {
+            syncedLocItems.push(res);
             locDone.add(loc.id);
             syncedTotal += 1;
           }
@@ -1281,13 +1437,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             lokasiKey,
             fc.periode
           );
-          await ensureLocationDoc(perusahaan, cleanLoc);
+          const ensuredLoc = await ensureLocationDoc(perusahaan, cleanLoc);
+          if (ensuredLoc) syncedLocItems.push(ensuredLoc);
           const fcRef = doc(firestore, 'field_conditions', id);
           const existing = await getDoc(fcRef);
           const jumlahBangunan =
             fc.bangunanKonservasi === 'Ada'
               ? Math.max(1, Math.round(fc.jumlahBangunan))
               : 0;
+          const cleanPetugas = normalizeDisplayText(fc.namaPetugas);
           if (!existing.exists()) {
             await setDoc(fcRef, {
               perusahaan,
@@ -1299,7 +1457,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
               coverCrop: fc.coverCrop,
               bangunanKonservasi: fc.bangunanKonservasi,
               jumlahBangunan,
-              namaPetugas: normalizeDisplayText(fc.namaPetugas),
+              namaPetugas: cleanPetugas,
               latitude: fc.latitude ?? null,
               longitude: fc.longitude ?? null,
               horizontalAccuracyM: fc.horizontalAccuracyM ?? null,
@@ -1316,7 +1474,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
               coverCrop: fc.coverCrop,
               bangunanKonservasi: fc.bangunanKonservasi,
               jumlahBangunan,
-              namaPetugas: normalizeDisplayText(fc.namaPetugas),
+              namaPetugas: cleanPetugas,
               latitude: fc.latitude ?? null,
               longitude: fc.longitude ?? null,
               horizontalAccuracyM: fc.horizontalAccuracyM ?? null,
@@ -1326,6 +1484,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
               updatedAt: serverTimestamp(),
             });
           }
+          syncedCondItems.push({
+            ...fc,
+            id,
+            perusahaan,
+            companyKey,
+            lokasi: cleanLoc,
+            lokasiKey,
+            jumlahBangunan,
+            namaPetugas: cleanPetugas,
+            updatedByUid: profile.uid,
+            updatedAt: new Date().toISOString(),
+            syncStatus: 'synced',
+          });
           fcDone.add(fc.id);
           syncedTotal += 1;
         }
@@ -1355,6 +1526,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           );
           const ccRef = doc(firestore, 'canopy_covers', id);
           const existing = await getDoc(ccRef);
+          const cleanPetugas = normalizeDisplayText(cc.namaPetugas);
           if (!existing.exists()) {
             await setDoc(ccRef, {
               perusahaan,
@@ -1366,7 +1538,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
               petakKey,
               periode: cc.periode,
               penutupanTajuk: cc.penutupanTajuk,
-              namaPetugas: normalizeDisplayText(cc.namaPetugas),
+              namaPetugas: cleanPetugas,
               createdByUid: profile.uid,
               updatedByUid: profile.uid,
               createdAt: serverTimestamp(),
@@ -1377,11 +1549,25 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
               lokasi: cleanLoc,
               nomorPetak: cleanPetak,
               penutupanTajuk: cc.penutupanTajuk,
-              namaPetugas: normalizeDisplayText(cc.namaPetugas),
+              namaPetugas: cleanPetugas,
               updatedByUid: profile.uid,
               updatedAt: serverTimestamp(),
             });
           }
+          syncedCanopyItems.push({
+            ...cc,
+            id,
+            perusahaan,
+            companyKey,
+            lokasi: cleanLoc,
+            lokasiKey,
+            nomorPetak: cleanPetak,
+            petakKey,
+            namaPetugas: cleanPetugas,
+            updatedByUid: profile.uid,
+            updatedAt: new Date().toISOString(),
+            syncStatus: 'synced',
+          });
           ccDone.add(cc.id);
           syncedTotal += 1;
         }
@@ -1418,7 +1604,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             rec.nomorTanaman
           );
 
-          await ensureLocationDoc(perusahaan, cleanLoc);
+          const ensuredLoc = await ensureLocationDoc(perusahaan, cleanLoc);
+          if (ensuredLoc) syncedLocItems.push(ensuredLoc);
           const recRef = doc(firestore, 'plant_records', id);
           const existingSnap = await getDoc(recRef);
           if (existingSnap.exists()) {
@@ -1433,6 +1620,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             continue;
           }
 
+          const cleanPetugas = normalizeDisplayText(rec.namaPetugas);
+          const tinggiCm = rec.kondisiTanaman === 'Mati' ? 0 : rec.tinggiCm;
+          const diameterMm = rec.kondisiTanaman === 'Mati' ? 0 : rec.diameterMm;
+          const keterangan = (rec.keterangan || '').trim().slice(0, 500);
+          const gnssOverrideReason = rec.gnssOverrideReason
+            ? rec.gnssOverrideReason.trim().slice(0, 250)
+            : null;
+
           await setDoc(recRef, {
             perusahaan,
             companyKey,
@@ -1442,16 +1637,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             periode,
             lokasi: cleanLoc,
             lokasiKey,
-            namaPetugas: normalizeDisplayText(rec.namaPetugas),
+            namaPetugas: cleanPetugas,
             nomorPetak: cleanPetak,
             petakKey,
             nomorTanaman: rec.nomorTanaman,
             kelompokTanaman: rec.kelompokTanaman,
             jenisTanaman: rec.jenisTanaman,
-            tinggiCm: rec.kondisiTanaman === 'Mati' ? 0 : rec.tinggiCm,
-            diameterMm: rec.kondisiTanaman === 'Mati' ? 0 : rec.diameterMm,
+            tinggiCm,
+            diameterMm,
             kondisiTanaman: rec.kondisiTanaman,
-            keterangan: (rec.keterangan || '').trim().slice(0, 500),
+            keterangan,
             extremeConfirmed: Boolean(rec.extremeConfirmed),
             latitude: rec.latitude ?? null,
             longitude: rec.longitude ?? null,
@@ -1459,9 +1654,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             horizontalAccuracyM: rec.horizontalAccuracyM ?? null,
             verticalAccuracyM: rec.verticalAccuracyM ?? null,
             gnssSource: rec.gnssSource ?? null,
-            gnssOverrideReason: rec.gnssOverrideReason
-              ? rec.gnssOverrideReason.trim().slice(0, 250)
-              : null,
+            gnssOverrideReason,
             coordCrs: rec.coordCrs ?? 'EPSG:4326',
             photoDataUrl: rec.photoDataUrl ?? null,
             sheetSyncedAt: null,
@@ -1470,6 +1663,29 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             updatedByUid: profile.uid,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
+          });
+          syncedPlantItems.push({
+            ...rec,
+            id,
+            perusahaan,
+            companyKey,
+            periode,
+            lokasi: cleanLoc,
+            lokasiKey,
+            namaPetugas: cleanPetugas,
+            nomorPetak: cleanPetak,
+            petakKey,
+            tinggiCm,
+            diameterMm,
+            keterangan,
+            gnssOverrideReason,
+            coordCrs: rec.coordCrs ?? 'EPSG:4326',
+            sheetSyncedAt: null,
+            createdByUid: profile.uid,
+            createdByEmail: profile.email,
+            updatedByUid: profile.uid,
+            updatedAt: new Date().toISOString(),
+            syncStatus: 'synced',
           });
           syncedPlantSet.add(rec.id);
           syncedTotal += 1;
@@ -1492,9 +1708,65 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             }),
         }));
 
+        // Merge newly synced items directly into local state & IndexedDB snapshot (0 extra Firestore reads)
+        const snapshotPatch: Partial<{
+          records: PlantRecord[];
+          fieldConditions: FieldCondition[];
+          canopyCovers: CanopyCover[];
+          locations: LocationMaster[];
+        }> = {};
+
+        if (syncedLocItems.length > 0) {
+          const map = new Map(
+            snapshotDataRef.current.locations.map((l) => [l.id, l])
+          );
+          syncedLocItems.forEach((l) => map.set(l.id, l));
+          const mergedLocs = Array.from(map.values());
+          setServerLocations(mergedLocs);
+          snapshotPatch.locations = mergedLocs;
+        }
+        if (syncedCondItems.length > 0) {
+          const map = new Map(
+            snapshotDataRef.current.fieldConditions.map((x) => [x.id, x])
+          );
+          syncedCondItems.forEach((x) => map.set(x.id, x));
+          const mergedConds = Array.from(map.values());
+          setServerFieldConditions(mergedConds);
+          snapshotPatch.fieldConditions = mergedConds;
+        }
+        if (syncedCanopyItems.length > 0) {
+          const map = new Map(
+            snapshotDataRef.current.canopyCovers.map((x) => [x.id, x])
+          );
+          syncedCanopyItems.forEach((x) => map.set(x.id, x));
+          const mergedCanopies = Array.from(map.values());
+          setServerCanopyCovers(mergedCanopies);
+          snapshotPatch.canopyCovers = mergedCanopies;
+        }
+        if (syncedPlantItems.length > 0) {
+          const map = new Map(
+            snapshotDataRef.current.records.map((r) => [r.id, r])
+          );
+          syncedPlantItems.forEach((r) => map.set(r.id, r));
+          const mergedRecs = Array.from(map.values()).sort((a, b) => {
+            if (a.tanggalInput !== b.tanggalInput) {
+              return b.tanggalInput.localeCompare(a.tanggalInput);
+            }
+            if ((a.waktuInput || '') !== (b.waktuInput || '')) {
+              return (b.waktuInput || '').localeCompare(a.waktuInput || '');
+            }
+            return b.nomorTanaman - a.nomorTanaman;
+          });
+          setServerRecords(mergedRecs);
+          snapshotPatch.records = mergedRecs;
+        }
+
+        if (Object.keys(snapshotPatch).length > 0) {
+          persistSnapshotPatch(snapshotPatch);
+        }
+
         setLastSyncAt(new Date());
         autoRetryCountRef.current = 0;
-        await refreshData();
       } catch (err) {
         encounteredError =
           err instanceof Error
@@ -1512,7 +1784,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         error: encounteredError,
       };
     },
-    [profile, mutateQueue, refreshData, ensureLocationDoc, matchesUserCompany]
+    [
+      profile,
+      mutateQueue,
+      ensureLocationDoc,
+      matchesUserCompany,
+      persistSnapshotPatch,
+    ]
   );
 
   // Auto-sync on connectivity return + bounded auto-retry
@@ -1813,10 +2091,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           });
         }
 
-        setServerFieldConditions((prev) => [
-          ...prev.filter((x) => x.id !== id),
-          { ...fcRecord, syncStatus: 'synced' },
-        ]);
+        const nextConds = [
+          ...snapshotDataRef.current.fieldConditions.filter((x) => x.id !== id),
+          { ...fcRecord, syncStatus: 'synced' as const },
+        ];
+        setServerFieldConditions(nextConds);
+        persistSnapshotPatch({ fieldConditions: nextConds });
         return { savedOffline: false };
       } catch (err) {
         if (isLikelyOfflineError(err)) {
@@ -1826,7 +2106,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         handleFirestoreError(err, OperationType.WRITE, `field_conditions/${id}`);
       }
     },
-    [profile, isOnline, mutateQueue, ensureLocationDoc]
+    [
+      profile,
+      isOnline,
+      mutateQueue,
+      ensureLocationDoc,
+      matchesUserCompany,
+      persistSnapshotPatch,
+    ]
   );
 
   const saveCanopyCover = useCallback(
@@ -1911,10 +2198,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
             updatedAt: serverTimestamp(),
           });
         }
-        setServerCanopyCovers((prev) => [
-          ...prev.filter((x) => x.id !== id),
-          { ...canopyRec, syncStatus: 'synced' },
-        ]);
+        const nextCanopies = [
+          ...snapshotDataRef.current.canopyCovers.filter((x) => x.id !== id),
+          { ...canopyRec, syncStatus: 'synced' as const },
+        ];
+        setServerCanopyCovers(nextCanopies);
+        persistSnapshotPatch({ canopyCovers: nextCanopies });
         return { savedOffline: false };
       } catch (err) {
         if (isLikelyOfflineError(err)) {
@@ -1924,7 +2213,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         handleFirestoreError(err, OperationType.WRITE, `canopy_covers/${id}`);
       }
     },
-    [profile, isOnline, mutateQueue]
+    [profile, isOnline, mutateQueue, matchesUserCompany, persistSnapshotPatch]
   );
 
   const savePlantRecord = useCallback(
@@ -2078,17 +2367,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         });
 
         const syncedRec: PlantRecord = { ...record, syncStatus: 'synced' };
-        setServerRecords((prev) => [
+        const nextRecords = [
           syncedRec,
-          ...prev.filter((x) => x.id !== id),
-        ]);
-        if (ensuredLoc) {
-          setServerLocations((prev) =>
-            prev.some((l) => l.id === ensuredLoc.id)
-              ? prev
-              : [...prev, ensuredLoc]
-          );
+          ...snapshotDataRef.current.records.filter((x) => x.id !== id),
+        ];
+        setServerRecords(nextRecords);
+        let nextLocs = snapshotDataRef.current.locations;
+        if (
+          ensuredLoc &&
+          !snapshotDataRef.current.locations.some((l) => l.id === ensuredLoc.id)
+        ) {
+          nextLocs = [...snapshotDataRef.current.locations, ensuredLoc];
+          setServerLocations(nextLocs);
         }
+        persistSnapshotPatch({ records: nextRecords, locations: nextLocs });
         return { savedOffline: false, record: syncedRec };
       } catch (err) {
         const msg = err instanceof Error ? err.message : '';
@@ -2111,6 +2403,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       checkDuplicatePlantNumber,
       mutateQueue,
       ensureLocationDoc,
+      matchesUserCompany,
+      persistSnapshotPatch,
     ]
   );
 
@@ -2318,17 +2612,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
 
         await updateDoc(recRef, patch);
 
-        setServerRecords((prev) =>
-          prev.map((r) =>
-            r.id === recordId
-              ? {
-                  ...r,
-                  ...patch,
-                  updatedAt: new Date().toISOString(),
-                }
-              : r
-          )
+        const nextRecords = snapshotDataRef.current.records.map((r) =>
+          r.id === recordId
+            ? {
+                ...r,
+                ...patch,
+                updatedAt: new Date().toISOString(),
+              }
+            : r
         );
+        setServerRecords(nextRecords);
+        persistSnapshotPatch({ records: nextRecords });
       } catch (err) {
         handleFirestoreError(
           err,
@@ -2337,7 +2631,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
     },
-    [profile]
+    [profile, persistSnapshotPatch]
   );
 
   const adminDeleteRecord = useCallback(
@@ -2347,7 +2641,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
       try {
         await deleteDoc(doc(firestore, 'plant_records', recordId));
-        setServerRecords((prev) => prev.filter((r) => r.id !== recordId));
+        const nextRecords = snapshotDataRef.current.records.filter(
+          (r) => r.id !== recordId
+        );
+        setServerRecords(nextRecords);
+        persistSnapshotPatch({ records: nextRecords });
       } catch (err) {
         handleFirestoreError(
           err,
@@ -2356,7 +2654,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
     },
-    [profile]
+    [profile, persistSnapshotPatch]
   );
 
   const adminAddStaff = useCallback(
@@ -2596,7 +2894,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         refsToDelete.slice(i, i + 400).forEach((r) => batch.delete(r));
         await batch.commit();
       }
-      await refreshData();
+      await refreshData(true);
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, 'staff_whitelist');
     }
@@ -2679,7 +2977,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
           createdByUid: profile.uid,
         };
         setPetaks((prev) => [...prev.filter((p) => p.id !== id), created]);
-        await refreshData();
+        await refreshData(true);
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, `petaks_master/${id}`);
       }
